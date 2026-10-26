@@ -26,12 +26,25 @@ On narrower terminals the windows stack, one per line, with labels, bars and per
 
 ## When a read fails
 
-- A failed read backs off: 1 minute, then 2, 4, 8, and at most 15 minutes. It waits longer if the server's `Retry-After` header asks for more. The first good read resets the backoff.
-- The schedule and backoff are shared too, so a 429 holds off every session, and a reload doesn't read again right away.
-- The last good figures stay on screen. For the first 5 minutes nothing else changes, so a brief rate limit goes unnoticed. After that a dim line appears under the bars, for example `updated 7m ago · rate-limited · retrying in 3m`. It turns yellow after 20 minutes, or straight away if your login has expired and you need to run `/login`.
-- `/usage-refresh` reads straight away, even during a backoff, and says why if the read fails.
+While reads are failing, a status row shows up. It sits under the bars, or on its own if there are no figures yet:
 
-This needs a claude.ai subscription login. API-key sessions show `usage: no claude.ai login`.
+```
+■■■■■■■■■■ rate-limited (429) · tried 40s ago · next try in 3m · figures from 7m ago
+```
+
+- **The blocks:** one per recent read by any session, oldest first. Up to 10 are kept. Green means a good read, red a failed one.
+- **The status:** what went wrong, with the HTTP status when there was one: rate-limited, login expired, usage service error, offline, or unexpected response.
+- **The details:** when the last read was, when the next one is due, and how old the figures on screen are.
+- **Colour:** the row is dim while the figures are recent. It turns yellow once they're over 20 minutes old, or if there are no figures at all, or straight away if your login has expired and you need to run `/login`.
+
+How it recovers:
+
+- A failed read backs off: 1 minute, then 2, 4, 8, and at most 15 minutes. If the server's `Retry-After` header asks for longer, the mod waits that long, up to 6 hours. When the backoff runs out, it retries at once. The first good read resets everything.
+- The schedule and backoff are shared too, so a 429 holds off every session. A failed read never overwrites figures another session read successfully in the meantime.
+- A read that hasn't answered after 20 seconds counts as offline, so a hung request can't stall a session.
+- Sessions without a claude.ai login (API-key sessions) and `-p` or SDK runs never read and never touch the shared store, so they can't block the sessions that can read.
+- The last good figures stay on screen. A window past its reset time shows 0% until the next read, which happens about a minute later.
+- `/usage-refresh` reads straight away, even during a backoff, and says what happened.
 
 ## Commands
 

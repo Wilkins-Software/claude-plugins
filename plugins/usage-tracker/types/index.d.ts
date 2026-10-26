@@ -19,6 +19,8 @@ export type UsageWindow = {
 }
 
 export type Snapshot = {
+  /** SNAPSHOT_VERSION of the code that wrote it. */
+  version: number
   windows: UsageWindow[]
   /** Epoch ms of the read these figures came from. */
   fetchedAt: number
@@ -32,6 +34,16 @@ export type Failure = {
   status: number | null
   /** Epoch ms of the next automatic attempt. */
   retryAt: number
+}
+
+/** One read of the usage endpoint, for the history strip. */
+export type Attempt = {
+  /** Epoch ms the read finished. */
+  at: number
+  /** HTTP status; null when no response arrived. */
+  status: number | null
+  /** `ok`, or why it failed. */
+  outcome: 'ok' | FailureKind
 }
 
 export type Schedule = {
@@ -51,6 +63,8 @@ export type Shared = {
   failure: Failure | null
   schedule: Schedule
   raw: string | null
+  /** The last few reads by any session, oldest first. */
+  history: Attempt[]
 }
 
 declare module 'claude-code' {
@@ -62,6 +76,8 @@ declare module 'claude-code' {
       tick: number
       /** Raw body of the last usage response, for /usage-raw. */
       raw: string | null
+      /** The last few reads by any session, oldest first. */
+      history: Attempt[]
     }
   }
 }

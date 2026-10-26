@@ -9,26 +9,50 @@ import {
   classify,
   isDue,
   parseRetryAfter,
+  health,
   readShared,
-  statusLine,
+  recordAttempt,
+  settleShared,
 } from './schedule'
+import { parseUsage } from './usage'
+import { BODY } from '../tests/fixtures'
 
 const MIN = 60_000
 
+const due = (reason: 'due' | 'turn' | 'manual', isActive = true, hasExpired = false) => ({
+  reason,
+  isActive,
+  hasExpired,
+})
+
 test('reads every 2 minutes while active, every 10 while idle', async () => {
   const plan = { ...EMPTY_SCHEDULE, lastAt: 0 }
-  expect(isDue(plan, 'due', true, ACTIVE_POLL_MS - 1)).toBe(false)
-  expect(isDue(plan, 'due', true, ACTIVE_POLL_MS)).toBe(true)
-  expect(isDue(plan, 'due', false, ACTIVE_POLL_MS)).toBe(false)
-  expect(isDue(plan, 'due', false, IDLE_POLL_MS)).toBe(true)
+  expect(isDue(plan, due('due'), ACTIVE_POLL_MS - 1)).toBe(false)
+  expect(isDue(plan, due('due'), ACTIVE_POLL_MS)).toBe(true)
+  expect(isDue(plan, due('due', false), ACTIVE_POLL_MS)).toBe(false)
+  expect(isDue(plan, due('due', false), IDLE_POLL_MS)).toBe(true)
 })
 
 test('a lease or a backoff holds every session back; manual goes anyway', async () => {
   const leased = { ...EMPTY_SCHEDULE, leaseUntil: 30 * MIN }
-  expect(isDue(leased, 'due', true, 20 * MIN)).toBe(false)
+  expect(isDue(leased, due('due'), 20 * MIN)).toBe(false)
   const waiting = { ...EMPTY_SCHEDULE, backoffMs: MIN, retryAt: 30 * MIN }
-  expect(isDue(waiting, 'turn', true, 20 * MIN)).toBe(false)
-  expect(isDue(waiting, 'manual', true, 20 * MIN)).toBe(true)
+  expect(isDue(waiting, due('turn'), 20 * MIN)).toBe(false)
+  expect(isDue(waiting, due('manual'), 20 * MIN)).toBe(true)
+})
+
+test('a spent backoff retries at once, not at the next poll', async () => {
+  const plan = backoff(EMPTY_SCHEDULE, null, 0)
+  expect(isDue(plan, due('due'), MIN - 1)).toBe(false)
+  expect(isDue(plan, due('due'), MIN)).toBe(true)
+  // A turn doesn't jump a backoff; the timer retries it.
+  expect(isDue(plan, due('turn'), MIN)).toBe(false)
+})
+
+test('a window past its reset reads a minute after the last read', async () => {
+  const plan = { ...EMPTY_SCHEDULE, lastAt: 0 }
+  expect(isDue(plan, due('due', false, true), MIN)).toBe(true)
+  expect(isDue(plan, due('due', false, false), MIN)).toBe(false)
 })
 
 test('classifies failures', async () => {
@@ -54,24 +78,67 @@ test('backs off from a minute, doubling to fifteen, honouring Retry-After', asyn
   }
   expect(waits).toEqual([1, 2, 4, 8, 15, 15])
   expect(backoff(EMPTY_SCHEDULE, 5 * MIN, 0).retryAt).toBe(5 * MIN)
+  // A server asking for an hour gets its hour, not the 15-minute cap.
+  expect(backoff(EMPTY_SCHEDULE, 60 * MIN, 0).retryAt).toBe(60 * MIN)
 })
 
-test('a brief failure stays quiet; a long one says so', async () => {
-  const limited = { kind: 'rate-limited' as const, status: 429, retryAt: 13 * MIN }
-  expect(statusLine(limited, 10 * MIN, 12 * MIN)).toBe(null)
-  expect(statusLine(limited, 0, 12 * MIN)).toEqual({
-    text: 'updated 12m ago · rate-limited · retrying in 1m',
+test('the status says what failed, when it tried, when it tries next, and how old the figures are', async () => {
+  const limited = { kind: 'rate-limited' as const, status: 429, retryAt: 15 * MIN }
+  const attempts = [
+    { at: 2 * MIN, status: 200, outcome: 'ok' as const },
+    { at: 11 * MIN, status: 429, outcome: 'rate-limited' as const },
+  ]
+  expect(health(null, attempts, 2 * MIN, 12 * MIN)).toBe(null)
+  expect(health(limited, attempts, 2 * MIN, 12 * MIN)).toEqual({
+    blocks: [true, false],
+    headline: 'rate-limited (429)',
+    details: ['tried 1m ago', 'next try in 3m', 'figures from 10m ago'],
     isWarning: false,
   })
-  expect(statusLine(limited, 0, 30 * MIN)?.isWarning).toBe(true)
+  expect(health(limited, attempts, null, 12 * MIN)?.details.at(-1)).toBe('no figures yet')
+  expect(health(limited, attempts, 0, 30 * MIN)?.isWarning).toBe(true)
   const expired = { kind: 'auth' as const, status: 401, retryAt: 0 }
-  expect(statusLine(expired, 11 * MIN, 12 * MIN)).toEqual({
-    text: 'updated 1m ago · login expired, run /login',
+  expect(health(expired, [], 11 * MIN, 12 * MIN)).toMatchObject({
+    headline: 'login expired, run /login (401)',
+    details: ['figures from 1m ago'],
     isWarning: true,
   })
+})
+
+test('the history keeps the last ten reads', async () => {
+  let attempts: ReturnType<typeof recordAttempt> = []
+  for (let i = 0; i < 12; i++) attempts = recordAttempt(attempts, { at: i, status: 200, outcome: 'ok' })
+  expect(attempts.map(a => a.at)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+})
+
+test('a slow failure never overwrites a success another session wrote meanwhile', async () => {
+  const fresh = parseUsage(BODY, 5 * MIN)
+  const latest = {
+    ...EMPTY_SHARED,
+    snapshot: fresh,
+    schedule: { ...EMPTY_SCHEDULE, lastAt: 5 * MIN },
+  }
+  const settled = settleShared(latest, { ok: false, at: 6 * MIN, status: 429, kind: 'rate-limited', retryAfterMs: null }, 4 * MIN)
+  expect(settled.snapshot).toBe(fresh)
+  expect(settled.failure).toBe(null)
+  expect(settled.schedule.backoffMs).toBe(0)
+  expect(settled.history.map(a => a.outcome)).toEqual(['rate-limited'])
+})
+
+test('an older success never replaces newer figures', async () => {
+  const newer = parseUsage(BODY, 6 * MIN)
+  const latest = { ...EMPTY_SHARED, snapshot: newer }
+  const older = parseUsage(BODY, 5 * MIN)
+  const settled = settleShared(latest, { ok: true, at: 5 * MIN, status: 200, snapshot: older, raw: BODY }, 4 * MIN)
+  expect(settled.snapshot).toBe(newer)
 })
 
 test('a store from another version starts over', async () => {
   expect(readShared({ schedule: { nextAt: 5 } })).toEqual(EMPTY_SHARED)
   expect(readShared(undefined)).toEqual(EMPTY_SHARED)
+  // 0.1.x snapshots had no version or periodMs: dropped, the schedule kept.
+  const old = { windows: [{ id: 'five_hour', label: '5h', percent: 3, resetsAt: 1 }], fetchedAt: 1 }
+  const shared = readShared({ ...EMPTY_SHARED, snapshot: old, failure: { kind: 'nope', retryAt: 1 } })
+  expect(shared.snapshot).toBe(null)
+  expect(shared.failure).toBe(null)
 })

@@ -9,6 +9,9 @@ const WEEK_MS = 7 * 24 * HOUR_MS
 export const THRESHOLDS = [80, 90, 100] as const
 // Pace stays quiet early in a window, when a projection is mostly noise.
 const MIN_ELAPSED_FRACTION = 0.1
+// Bump when Snapshot or UsageWindow change: state and the shared store outlive
+// the code that wrote them, and a figure of an older shape is dropped, not trusted.
+export const SNAPSHOT_VERSION = 2
 
 type ApiWindow = { utilization?: number | null; resets_at?: string | null } | null
 
@@ -85,7 +88,11 @@ function fromLegacy(json: ApiBody): UsageWindow[] {
 
 export function parseUsage(body: string, fetchedAt: number): Snapshot {
   const json = JSON.parse(body) as ApiBody
-  if (!Array.isArray(json.limits)) return { windows: fromLegacy(json), fetchedAt }
+  // A body with none of the fields this reads isn't a usage response.
+  if (!Array.isArray(json.limits) && !('five_hour' in json) && !('seven_day' in json)) {
+    throw new Error('no usage figures in the response')
+  }
+  if (!Array.isArray(json.limits)) return { version: SNAPSHOT_VERSION, windows: fromLegacy(json), fetchedAt }
   const shares = new Map<number, number>()
   for (const share of json.weekly_scoped_shares ?? []) {
     const allowance = share.allowance_percent_of_weekly
@@ -97,7 +104,55 @@ export function parseUsage(body: string, fetchedAt: number): Snapshot {
     .map((limit, index) => fromLimit(limit, shares.get(index) ?? null))
     .filter((window): window is UsageWindow => window !== null)
 
-  return { windows, fetchedAt }
+  return { version: SNAPSHOT_VERSION, windows, fetchedAt }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+/** A snapshot this code wrote, with every field it reads; anything else is dropped. */
+export function isSnapshot(value: unknown): value is Snapshot {
+  if (!isRecord(value) || value.version !== SNAPSHOT_VERSION || !Array.isArray(value.windows)) return false
+  if (!Number.isFinite(value.fetchedAt)) return false
+
+  return value.windows.every(
+    window =>
+      isRecord(window) &&
+      typeof window.id === 'string' &&
+      typeof window.label === 'string' &&
+      Number.isFinite(window.percent) &&
+      (window.resetsAt === null || Number.isFinite(window.resetsAt)) &&
+      (window.periodMs === null || Number.isFinite(window.periodMs)),
+  )
+}
+
+/**
+ * True once a window has reset since the read: its figures are spent. A reset
+ * already past when read doesn't count, or a stale one would read every minute.
+ */
+export function hasExpired(snapshot: Snapshot | null, now: number): boolean {
+  if (snapshot === null) return false
+
+  return snapshot.windows.some(
+    window => window.resetsAt !== null && window.resetsAt > snapshot.fetchedAt && window.resetsAt <= now,
+  )
+}
+
+// A window past its reset is at zero until the next read says otherwise;
+// the next window starts with the first use after it.
+export function settle(snapshot: Snapshot | null, now: number): Snapshot | null {
+  const isSpent = snapshot?.windows.some(window => window.resetsAt !== null && window.resetsAt <= now)
+  if (snapshot === null || !isSpent) return snapshot
+
+  return {
+    ...snapshot,
+    windows: snapshot.windows.map(window =>
+      window.resetsAt !== null && window.resetsAt <= now
+        ? { ...window, percent: 0, resetsAt: null, isEstimate: true }
+        : window,
+    ),
+  }
 }
 
 // The response headers carry 5h and week with every API response: fold them in
@@ -131,8 +186,15 @@ export function applyRateLimits(
   })
   const name = model?.toLowerCase() ?? ''
   const estimated = windows.map(window => {
+    // A scoped window past its own reset holds last week's figure: leave it
+    // for the next read rather than add to it.
+    const isCurrent = window.resetsAt === null || window.resetsAt > now
     const isCounted =
-      weeklyRise > 0 && window.weeklyShare !== null && window.model !== null && name.includes(window.model)
+      weeklyRise > 0 &&
+      isCurrent &&
+      window.weeklyShare !== null &&
+      window.model !== null &&
+      name.includes(window.model)
     if (!isCounted) return window
 
     return {
@@ -145,15 +207,27 @@ export function applyRateLimits(
   return { ...current, windows: estimated }
 }
 
-/** The highest threshold each window has reached, keyed so a reset starts over. */
-export function crossings(snapshot: Snapshot | null): Map<string, number> {
-  const reached = new Map<string, number>()
+/**
+ * The highest threshold each window has reached, keyed so a reset starts
+ * over. Estimates don't count: an overshoot shouldn't raise an alarm. The
+ * reset is rounded to the hour, as the headers and the endpoint give the same
+ * reset a few hundred milliseconds apart.
+ */
+export function crossings(snapshot: Snapshot | null, now: number): Map<string, { level: number; window: UsageWindow }> {
+  const reached = new Map<string, { level: number; window: UsageWindow }>()
   for (const window of snapshot?.windows ?? []) {
-    const top = THRESHOLDS.filter(threshold => window.percent >= threshold).at(-1)
-    if (top !== undefined) reached.set(`${window.id}@${window.resetsAt ?? 0}`, top)
+    // A window past its reset is spent: announcing it again would repeat.
+    if (window.isEstimate || window.resetsAt === null || window.resetsAt <= now) continue
+    const level = THRESHOLDS.filter(threshold => window.percent >= threshold).at(-1)
+    if (level !== undefined) reached.set(`${window.id}@${Math.round(window.resetsAt / 3_600_000)}`, { level, window })
   }
 
   return reached
+}
+
+/** The hour a crossing key's window resets in, so old keys can be dropped. */
+export function crossingHour(key: string): number {
+  return Number(key.slice(key.lastIndexOf('@') + 1))
 }
 
 export type Pace = { label: string; runsOutIn: number; resetsIn: number }
@@ -168,7 +242,7 @@ export function paceWarning(snapshot: Snapshot | null, now: number): Pace | null
     const elapsed = window.periodMs - resetsIn
     if (elapsed < window.periodMs * MIN_ELAPSED_FRACTION || window.percent <= 0) continue
     const runsOutIn = ((100 - window.percent) / window.percent) * elapsed
-    if (runsOutIn >= resetsIn) continue
+    if (!Number.isFinite(runsOutIn) || runsOutIn >= resetsIn) continue
     if (worst === null || runsOutIn < worst.runsOutIn) {
       worst = { label: window.label, runsOutIn, resetsIn }
     }
@@ -178,6 +252,7 @@ export function paceWarning(snapshot: Snapshot | null, now: number): Pace | null
 }
 
 export function formatRemaining(ms: number): string {
+  if (!Number.isFinite(ms)) return '?'
   if (ms <= 0) return 'now'
   const minutes = Math.ceil(ms / 60_000)
   const days = Math.floor(minutes / 1440)
