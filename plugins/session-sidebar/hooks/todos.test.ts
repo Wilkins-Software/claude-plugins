@@ -91,9 +91,9 @@ test('with everything done the window shows the end', async () => {
   expect(view.below).toBe(0)
 })
 
-test('the reminder names the tool and lists the items', () => {
-  const text = reminder('mcp__session-sidebar__todo', { nextId: 2, items: [{ id: 1, text: 'Ship it', status: 'pending' }] })
+test('the reminder carries the list only when given one', () => {
+  const text = reminder('mcp__session-sidebar__todo', '1. [ ] Ship it')
   expect(text).toContain('`mcp__session-sidebar__todo`')
   expect(text.endsWith('1. [ ] Ship it')).toBe(true)
-  expect(reminder('t', EMPTY_TODOS)).toContain('The todo list is empty.')
+  expect(reminder('t', null)).toContain('unchanged since you last read it')
 })

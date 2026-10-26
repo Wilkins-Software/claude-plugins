@@ -43,6 +43,9 @@ const cache = atom({ plugin: 'session-sidebar', key: 'cache' } as const, EMPTY_C
 const tick = atom({ plugin: 'session-sidebar', key: 'tick' } as const, 0)
 const frame = atom({ plugin: 'session-sidebar', key: 'frame' } as const, 0)
 const working = atom({ plugin: 'session-sidebar', key: 'working' } as const, false)
+// The list as the model last read it, from a reminder or the tool's result; null
+// when it has read none in this conversation, or compaction took it away.
+const seen = atom({ plugin: 'session-sidebar', key: 'seen' } as const, null as string | null)
 
 let spinner: Timer | null = null
 
@@ -125,6 +128,7 @@ export const register: Register = on => {
       await Promise.all([
         update($, todos, () => EMPTY_TODOS),
         update($, cache, () => EMPTY_CACHE),
+        update($, seen, () => null),
         update($, info, current => ({ ...EMPTY_INFO, model: current.model, effort: current.effort })),
       ])
       await syncSpinner($)
@@ -150,9 +154,11 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const isUsers = e.origin.kind === 'composer' || e.origin.kind === 'bridge' || e.origin.kind === 'sdk'
     if (!isUsers || e.command !== undefined || e.isMeta) return next(e)
-    const list = await read($, todos)
+    const [list, last] = await Promise.all([read($, todos), read($, seen)])
+    const current = describe(list)
+    await update($, seen, () => current)
 
-    return next({ ...e, context: [...(e.context ?? []), reminder(TOOL, list)] })
+    return next({ ...e, context: [...(e.context ?? []), reminder(TOOL, current === last ? null : current)] })
   })
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
@@ -167,8 +173,10 @@ export const register: Register = on => {
     })
     if (error !== null) return { deny: error }
     await syncSpinner($)
+    const current = describe(changed)
+    await update($, seen, () => current)
 
-    return { result: describe(changed) }
+    return { result: current }
   })
 
   on('turn.start', async ($, e, next) => {
@@ -230,6 +238,7 @@ export const register: Register = on => {
     const isApplied = e.trigger !== 'precompute' && !('skip' in result && result.skip !== undefined)
     if (e.agentId === undefined && isApplied) {
       await update($, cache, current => ({ ...current, isCompacted: true }))
+      await update($, seen, () => null)
       // A failed read leaves the old figures up; the next measure corrects them.
       await refresh($).catch(() => undefined)
     }

@@ -110,11 +110,10 @@ export function windowTodos(items: Todo[], room: number): TodoWindow {
 }
 
 // Rides along with each prompt the user types, where the model reads it next to
-// the ask; the system prompt's section alone is easy to pass over.
-export function reminder(tool: string, list: Todos): string {
-  return [
-    `Session todo list (the user's sidebar, kept with \`${tool}\`): if this message gives you a task to do, add it as one short item, or mark the matching item active, before you start, and mark it done when it is finished. Skip this for a plain question.`,
-    'Current list:',
-    describe(list),
-  ].join('\n')
+// the ask; the system prompt's section alone is easy to pass over. `list` is the
+// described list, or null when the model has already read it unchanged.
+export function reminder(tool: string, list: string | null): string {
+  const instruction = `Session todo list (the user's sidebar, kept with \`${tool}\`): if this message gives you a task to do, add it as one short item, or mark the matching item active, before you start, and mark it done when it is finished. Skip this for a plain question.`
+
+  return list === null ? `${instruction} The list is unchanged since you last read it.` : `${instruction}\nCurrent list:\n${list}`
 }

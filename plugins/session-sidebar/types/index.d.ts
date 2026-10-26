@@ -48,6 +48,8 @@ declare module 'claude-code' {
       frame: number
       /** True while a main-loop turn runs; the spinner turns only then. */
       working: boolean
+      /** The described list as the model last read it; null for none this conversation. */
+      seen: string | null
     }
   }
 }

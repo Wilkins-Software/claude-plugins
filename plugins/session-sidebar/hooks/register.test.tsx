@@ -81,11 +81,17 @@ test("the user's prompts carry the list; commands and notifications don't", asyn
   mock.clock(on, { now: 0 })
   engine(on)
   on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  on('session.compact', (_, e) => ({ messages: e.messages }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: TOOL, ops: [{ op: 'add', text: 'Fix the bug', status: 'active' }] } as never)
 
-  const typed = await $.prompt.submit({ text: 'and the docs', wait: false, origin: { kind: 'composer' } } as never)
-  expect(typed.context?.at(-1)).toContain('1. [>] Fix the bug')
+  // The tool's result showed the model the list, so a prompt only reminds.
+  const submit = () => $.prompt.submit({ text: 'and the docs', wait: false, origin: { kind: 'composer' } } as never)
+  expect((await submit()).context?.at(-1)).toContain('unchanged')
+  // Compaction takes it out of the context, so the next prompt carries it once.
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'summary', toolUses: [] }] } as never)
+  expect((await submit()).context?.at(-1)).toContain('1. [>] Fix the bug')
+  expect((await submit()).context?.at(-1)).toContain('unchanged')
   const command = await $.prompt.submit({
     text: '/sidebar',
     command: { name: 'sidebar', args: '' },

@@ -1,6 +1,6 @@
 {
   "name": "session-sidebar",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A sidebar beside the chat: model, effort and context fill, prompt-cache status, and a todo list of the tasks you've given Claude this session.",
   "author": {
     "name": "Mark Wilkins",

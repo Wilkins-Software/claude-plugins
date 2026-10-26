@@ -46,7 +46,7 @@ A sidebar docked on the right of Claude Code with three small cards: the session
 **Todo**
 
 - Claude keeps the list by itself with the `todo` tool this mod adds: each task you give it goes on the list, the one it's working on is marked active, and finished ones are marked done. Plain questions aren't added.
-- It's told how twice: once in the system prompt, and again in a short note attached to each prompt you type, which also carries the current list. The note is what makes it stick, since the model reads it right beside your ask. Slash commands, notifications and other plugins' prompts don't get it.
+- It's told how twice: once in the system prompt, and again in a short note attached to each prompt you type. The note carries the current list only when Claude hasn't already seen it as it stands, from its own last edit or an earlier note; after a compaction or `/clear` it carries the list again. Otherwise it's one line, about 70 tokens. The note is what makes it stick, since the model reads it right beside your ask. Slash commands, notifications and other plugins' prompts don't get it.
 - Ask Claude to add, remove, reword or reorder "the todo list" and it edits this one. It's separate from Claude's own planning list (TodoWrite).
 - The active item has a spinner while Claude is working, and a `▸` between turns. Done items are checked and crossed out. The header counts done items out of all of them.
 - The card takes at most a quarter of the sidebar's height. A longer list shows a window that follows the active item, with `↑ n more` and `↓ n more` rows.
