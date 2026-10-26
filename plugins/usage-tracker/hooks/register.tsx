@@ -151,11 +151,11 @@ async function refresh($: EngineInterface): Promise<void> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
-      name: 'usage-tracker:raw',
+      name: 'usage-raw',
       description: 'Show the raw usage API response behind the usage band',
     })
     await $.command.register({
-      name: 'usage-tracker:refresh',
+      name: 'usage-refresh',
       description: 'Re-read plan usage now',
     })
     void refresh($)
@@ -183,13 +183,13 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'usage-tracker:raw' }, async $ => {
+  on('command.run', { command: 'usage-raw' }, async $ => {
     const body = await read($, raw)
 
     return { text: body ?? 'No usage response yet.' }
   })
 
-  on('command.run', { command: 'usage-tracker:refresh' }, async $ => {
+  on('command.run', { command: 'usage-refresh' }, async $ => {
     await refresh($)
     const failure = await read($, error)
 

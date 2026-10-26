@@ -16,8 +16,8 @@ This needs a claude.ai subscription login. API-key sessions show `usage: no clau
 
 ## Commands
 
-- `/usage-tracker:refresh`: read usage now
-- `/usage-tracker:raw`: show the raw usage response
+- `/usage-refresh`: read usage now
+- `/usage-raw`: show the raw usage response
 
 ## Install
 
