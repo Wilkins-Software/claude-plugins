@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Failure, Shared, Snapshot } from '../types'
 import { SEPARATOR, bar, colorFor, fitHeight, layoutFor, percentText } from './layout'
@@ -265,14 +265,44 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
 
     // The frame gives way first when the band is short of rows.
-    const frame = (fit: Fit) => ({
-      borderStyle: fit.hasBorder ? 'round' : undefined,
-      borderDimColor: true,
-      // Fullscreen docks panes on a darker ground; the band matches it there.
-      backgroundColor: e.viewport?.isFullscreen ? PANE_BACKGROUND : undefined,
-      paddingX: fit.hasBorder ? 2 : 0,
-      marginTop: fit.hasMargin ? 1 : 0,
-    })
+    // Fullscreen docks panes on a darker ground and the band matches it there. A Box's
+    // own border leaves its cells on the terminal's ground, so that frame is drawn by hand.
+    const framed = (fit: Fit, rows: number, body: RenderChildren) => {
+      if (!e.viewport?.isFullscreen || !fit.hasBorder) {
+        return (
+          <Box
+            borderStyle={fit.hasBorder ? 'round' : undefined}
+            borderDimColor
+            paddingX={fit.hasBorder ? 2 : 0}
+            marginTop={fit.hasMargin ? 1 : 0}
+            flexDirection="column"
+          >
+            {body}
+          </Box>
+        )
+      }
+      const edge = (text: string) => (
+        <Text dimColor backgroundColor={PANE_BACKGROUND}>
+          {text}
+        </Text>
+      )
+      const across = '─'.repeat(Math.max(0, e.props.bodyColumns - 2))
+      const side = Array.from({ length: rows }, () => '│').join('\n')
+
+      return (
+        <Box flexDirection="column" marginTop={fit.hasMargin ? 1 : 0} backgroundColor={PANE_BACKGROUND}>
+          {edge(`╭${across}╮`)}
+          <Box flexDirection="row">
+            {edge(side)}
+            <Box flexDirection="column" flexGrow={1} paddingX={2}>
+              {body}
+            </Box>
+            {edge(side)}
+          </Box>
+          {edge(`╰${across}╯`)}
+        </Box>
+      )
+    }
 
     const status = health(failed, attempts, current?.fetchedAt ?? null, now)
     // Recent reads as blocks, then what went wrong and what happens next.
@@ -293,11 +323,7 @@ export const register: Register = on => {
     )
 
     if (current === null) {
-      return (
-        <Box {...frame(fitHeight(1, 0, e.props.maxRows))} flexDirection="column">
-          {statusRow ?? <Text dimColor>usage: loading…</Text>}
-        </Box>
-      )
+      return framed(fitHeight(1, 0, e.props.maxRows), 1, statusRow ?? <Text dimColor>usage: loading…</Text>)
     }
     const resets = current.windows.map(window =>
       window.resetsAt === null ? null : formatRemaining(window.resetsAt - now),
@@ -316,8 +342,10 @@ export const register: Register = on => {
     const shown = extras.slice(extras.length - fit.extraLines)
 
     if (fit.isCompact) {
-      return (
-        <Box {...frame(fit)} flexDirection="column">
+      return framed(
+        fit,
+        1 + shown.length,
+        <Box flexDirection="column">
           <Box flexDirection="row">
             {current.windows.map((window, index) => (
               <Box key={window.id} flexDirection="row" flexShrink={0}>
@@ -329,12 +357,14 @@ export const register: Register = on => {
             ))}
           </Box>
           {shown}
-        </Box>
+        </Box>,
       )
     }
 
-    return (
-      <Box {...frame(fit)} flexDirection="column">
+    return framed(
+      fit,
+      (isStack ? current.windows.length : 1) + shown.length,
+      <Box flexDirection="column">
         <Box flexDirection={isStack ? 'column' : 'row'}>
           {current.windows.map((window, index) => {
             const color = colorFor(window.percent)
@@ -358,7 +388,7 @@ export const register: Register = on => {
           })}
         </Box>
         {shown}
-      </Box>
+      </Box>,
     )
   })
 }
