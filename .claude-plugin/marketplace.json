@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "wilkins-software",
+  "owner": {
+    "name": "Mark Wilkins",
+    "email": "mark@wilkins.software"
+  },
+  "metadata": {
+    "description": "Mark Wilkins' personal Claude Code plugins and skills.",
+    "version": "0.1.0"
+  },
+  "plugins": []
+}

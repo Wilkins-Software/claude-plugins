@@ -1,0 +1,11 @@
+{
+  "name": "PLUGIN_NAME",
+  "version": "0.1.0",
+  "description": "PLUGIN_DESCRIPTION",
+  "author": {
+    "name": "Mark Wilkins",
+    "email": "mark@wilkins.software"
+  },
+  "repository": "https://github.com/Wilkins-Software/claude-plugins",
+  "license": "MIT"
+}
