@@ -47,6 +47,8 @@ const history = atom({ plugin: 'usage-tracker', key: 'history' } as const, [])
 
 let isFetching = false
 let lastActiveAt = 0
+// When this session's last main-loop turn ended, for the early read.
+let lastTurnAt = 0
 let lastTurnModel: string | null = null
 
 // This session's failure, or null when state holds an older version's.
@@ -118,8 +120,10 @@ async function refresh($: EngineInterface, reason: Reason): Promise<Refreshed> {
       reason,
       isActive: now - lastActiveAt < ACTIVE_FOR_MS,
       hasExpired: hasExpired(await readSnapshot($), now),
+      lastTurnAt,
     }
-    if (!isDue(shared.schedule, due, now)) return 'not-due'
+    const kind = isDue(shared.schedule, due, now)
+    if (kind === null) return 'not-due'
     // No claude.ai login is this session's own business: an API-key session
     // mustn't hold back or back off the sessions that can read.
     const auth = await $.session.authorize()
@@ -133,7 +137,7 @@ async function refresh($: EngineInterface, reason: Reason): Promise<Refreshed> {
     const outcome = await fetchUsage($, auth.handle)
     // Merge into what the store holds now: another session may have read meanwhile.
     const latest = readShared(await $.store.get(SHARED_KEY))
-    const settled = settleShared(latest, outcome, now)
+    const settled = settleShared(latest, outcome, now, kind)
     await $.store.set(SHARED_KEY, settled)
     await adopt($, settled)
 
@@ -206,8 +210,9 @@ export const register: Register = on => {
     // nor names the model the main turn bills.
     if (e.agentId !== undefined) return result
     lastActiveAt = await $.clock.now()
+    lastTurnAt = lastActiveAt
     lastTurnModel = e.usage?.model ?? lastTurnModel
-    void refresh($, 'turn')
+    // No read here: the timer reads early once turns have settled (SETTLE_MS).
 
     return result
   })

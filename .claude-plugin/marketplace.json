@@ -14,7 +14,7 @@
       "name": "usage-tracker",
       "source": "./plugins/usage-tracker",
       "description": "Live plan usage above the prompt: 5-hour session, weekly, and per-model weekly limits with reset countdowns.",
-      "version": "0.3.1"
+      "version": "0.3.2"
     }
   ]
 }

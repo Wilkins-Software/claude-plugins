@@ -9,8 +9,12 @@ export const ACTIVE_POLL_MS = 2 * 60_000
 export const IDLE_POLL_MS = 10 * 60_000
 // A session is active this long after its last prompt or turn.
 export const ACTIVE_FOR_MS = 15 * 60_000
-// A turn's end may bring the next read forward, to no sooner than this after the last.
+// An early read comes no sooner than this after the last, and only when the
+// next regular read is further off than this.
 export const MIN_REFETCH_MS = 60_000
+// A turn brings a read forward once no other turn has ended for this long,
+// so a burst of messages makes one early read, at its end.
+export const SETTLE_MS = 30_000
 // How long a session holds the read before another may take it over.
 export const LEASE_MS = 30_000
 const MIN_BACKOFF_MS = 60_000
@@ -22,7 +26,7 @@ const WARN_STALE_MS = 20 * 60_000
 // How many reads the history strip keeps.
 export const HISTORY_SIZE = 10
 
-export const EMPTY_SCHEDULE: Schedule = { lastAt: 0, backoffMs: 0, retryAt: 0, leaseUntil: 0 }
+export const EMPTY_SCHEDULE: Schedule = { lastAt: 0, nextAt: 0, backoffMs: 0, retryAt: 0, leaseUntil: 0 }
 export const EMPTY_SHARED: Shared = {
   snapshot: null,
   failure: null,
@@ -31,25 +35,43 @@ export const EMPTY_SHARED: Shared = {
   history: [],
 }
 
-export type Reason = 'due' | 'turn' | 'manual'
+export type Reason = 'due' | 'manual'
+
+/** A regular read in its slot, or an early one that takes the next slot. */
+export type ReadKind = 'regular' | 'early'
 
 export type Due = {
   reason: Reason
   isActive: boolean
   /** A window's reset has passed, so the figures on screen are spent. */
   hasExpired: boolean
+  /** When this session's last main-loop turn ended; 0 before any. */
+  lastTurnAt: number
 }
 
-/** Whether this session should read now, given what every session shares. */
-export function isDue(schedule: Schedule, due: Due, now: number): boolean {
-  if (due.reason === 'manual') return true
-  if (now < schedule.leaseUntil || now < schedule.retryAt) return false
-  // A backoff that has run out retries at once, not at the next poll.
-  if (schedule.backoffMs > 0) return due.reason === 'due'
+/**
+ * Whether this session should read now, given what every session shares, and
+ * if so which kind of read it is.
+ *
+ * Regular reads come in slots, `nextAt`, every 2 minutes (10 when idle). A
+ * turn may bring a read forward, once turns have settled and the next slot is
+ * over a minute away, but that early read takes the next slot rather than
+ * adding one: however fast messages come, reads stay at the regular rate.
+ */
+export function isDue(schedule: Schedule, due: Due, now: number): ReadKind | null {
+  if (due.reason === 'manual') return 'regular'
+  if (now < schedule.leaseUntil || now < schedule.retryAt) return null
+  // A backoff that has run out retries at once, not at the next slot.
+  if (schedule.backoffMs > 0) return 'regular'
   const since = now - schedule.lastAt
-  if (due.reason === 'turn' || due.hasExpired) return since >= MIN_REFETCH_MS
+  // Spent figures read soon, as their own regular read.
+  if (due.hasExpired && since >= MIN_REFETCH_MS) return 'regular'
+  const slot = due.isActive ? schedule.nextAt : Math.max(schedule.nextAt, schedule.lastAt + IDLE_POLL_MS)
+  if (now >= slot) return 'regular'
+  const hasSettledTurn = due.lastTurnAt > schedule.lastAt && now - due.lastTurnAt >= SETTLE_MS
+  const isWorthIt = since >= MIN_REFETCH_MS && schedule.nextAt - now > MIN_REFETCH_MS
 
-  return since >= (due.isActive ? ACTIVE_POLL_MS : IDLE_POLL_MS)
+  return hasSettledTurn && isWorthIt ? 'early' : null
 }
 
 export function classify(status: number | null): FailureKind {
@@ -77,7 +99,7 @@ export function backoff(previous: Schedule, retryAfterMs: number | null, now: nu
   const doubled = Math.min(MAX_BACKOFF_MS, Math.max(MIN_BACKOFF_MS, previous.backoffMs * 2))
   const wait = Math.max(doubled, Math.min(MAX_RETRY_AFTER_MS, retryAfterMs ?? 0))
 
-  return { lastAt: now, backoffMs: doubled, retryAt: now + wait, leaseUntil: 0 }
+  return { lastAt: now, nextAt: now + wait, backoffMs: doubled, retryAt: now + wait, leaseUntil: 0 }
 }
 
 export const FAILURE_TEXT: Record<FailureKind, string> = {
@@ -99,7 +121,7 @@ export type Outcome =
  * (`latest`, read again after the fetch) rather than what it held before: a
  * success another session wrote meanwhile is kept, and the newest figures win.
  */
-export function settleShared(latest: Shared, outcome: Outcome, startedAt: number): Shared {
+export function settleShared(latest: Shared, outcome: Outcome, startedAt: number, kind: ReadKind): Shared {
   const history = recordAttempt(latest.history, {
     at: outcome.at,
     status: outcome.status,
@@ -112,7 +134,14 @@ export function settleShared(latest: Shared, outcome: Outcome, startedAt: number
       snapshot: isNewest ? outcome.snapshot : latest.snapshot,
       raw: isNewest ? outcome.raw : latest.raw,
       failure: null,
-      schedule: { lastAt: outcome.at, backoffMs: 0, retryAt: 0, leaseUntil: 0 },
+      schedule: {
+        lastAt: outcome.at,
+        // An early read took the next slot, so the one after it comes next.
+        nextAt: kind === 'early' ? latest.schedule.nextAt + ACTIVE_POLL_MS : outcome.at + ACTIVE_POLL_MS,
+        backoffMs: 0,
+        retryAt: 0,
+        leaseUntil: 0,
+      },
       history,
     }
   }
@@ -202,9 +231,14 @@ function isAttempt(value: unknown): value is Attempt {
 // has the right shape and start over on anything else.
 export function readShared(value: unknown): Shared {
   if (!isRecord(value) || !isRecord(value.schedule)) return EMPTY_SHARED
-  const schedule = value.schedule
+  const stored = value.schedule
   const numbers = ['lastAt', 'backoffMs', 'retryAt', 'leaseUntil'] as const
-  if (!numbers.every(key => Number.isFinite(schedule[key]))) return EMPTY_SHARED
+  if (!numbers.every(key => Number.isFinite(stored[key]))) return EMPTY_SHARED
+  // 0.3.0 and earlier kept no slot: the next one is a poll after the last read.
+  const schedule = {
+    ...stored,
+    nextAt: Number.isFinite(stored.nextAt) ? stored.nextAt : Number(stored.lastAt) + ACTIVE_POLL_MS,
+  }
   const failure = value.failure
 
   return {

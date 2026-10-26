@@ -19,40 +19,84 @@ import { BODY } from '../tests/fixtures'
 
 const MIN = 60_000
 
-const due = (reason: 'due' | 'turn' | 'manual', isActive = true, hasExpired = false) => ({
+const due = (reason: 'due' | 'manual', options: { isActive?: boolean; hasExpired?: boolean; lastTurnAt?: number } = {}) => ({
   reason,
-  isActive,
-  hasExpired,
+  isActive: options.isActive ?? true,
+  hasExpired: options.hasExpired ?? false,
+  lastTurnAt: options.lastTurnAt ?? 0,
 })
 
-test('reads every 2 minutes while active, every 10 while idle', async () => {
-  const plan = { ...EMPTY_SCHEDULE, lastAt: 0 }
-  expect(isDue(plan, due('due'), ACTIVE_POLL_MS - 1)).toBe(false)
-  expect(isDue(plan, due('due'), ACTIVE_POLL_MS)).toBe(true)
-  expect(isDue(plan, due('due', false), ACTIVE_POLL_MS)).toBe(false)
-  expect(isDue(plan, due('due', false), IDLE_POLL_MS)).toBe(true)
+// A healthy schedule after a regular read at `at`.
+const readAt = (at: number) => ({ ...EMPTY_SCHEDULE, lastAt: at, nextAt: at + ACTIVE_POLL_MS })
+
+test('reads in 2-minute slots while active, every 10 minutes while idle', async () => {
+  const plan = readAt(0)
+  expect(isDue(plan, due('due'), ACTIVE_POLL_MS - 1)).toBe(null)
+  expect(isDue(plan, due('due'), ACTIVE_POLL_MS)).toBe('regular')
+  expect(isDue(plan, due('due', { isActive: false }), ACTIVE_POLL_MS)).toBe(null)
+  expect(isDue(plan, due('due', { isActive: false }), IDLE_POLL_MS)).toBe('regular')
 })
 
 test('a lease or a backoff holds every session back; manual goes anyway', async () => {
-  const leased = { ...EMPTY_SCHEDULE, leaseUntil: 30 * MIN }
-  expect(isDue(leased, due('due'), 20 * MIN)).toBe(false)
+  const leased = { ...readAt(0), leaseUntil: 30 * MIN }
+  expect(isDue(leased, due('due'), 20 * MIN)).toBe(null)
   const waiting = { ...EMPTY_SCHEDULE, backoffMs: MIN, retryAt: 30 * MIN }
-  expect(isDue(waiting, due('turn'), 20 * MIN)).toBe(false)
-  expect(isDue(waiting, due('manual'), 20 * MIN)).toBe(true)
+  expect(isDue(waiting, due('due'), 20 * MIN)).toBe(null)
+  expect(isDue(waiting, due('manual'), 20 * MIN)).toBe('regular')
 })
 
-test('a spent backoff retries at once, not at the next poll', async () => {
+test('a spent backoff retries at once, not at the next slot', async () => {
   const plan = backoff(EMPTY_SCHEDULE, null, 0)
-  expect(isDue(plan, due('due'), MIN - 1)).toBe(false)
-  expect(isDue(plan, due('due'), MIN)).toBe(true)
-  // A turn doesn't jump a backoff; the timer retries it.
-  expect(isDue(plan, due('turn'), MIN)).toBe(false)
+  expect(isDue(plan, due('due'), MIN - 1)).toBe(null)
+  expect(isDue(plan, due('due'), MIN)).toBe('regular')
 })
 
 test('a window past its reset reads a minute after the last read', async () => {
-  const plan = { ...EMPTY_SCHEDULE, lastAt: 0 }
-  expect(isDue(plan, due('due', false, true), MIN)).toBe(true)
-  expect(isDue(plan, due('due', false, false), MIN)).toBe(false)
+  const plan = readAt(0)
+  expect(isDue(plan, due('due', { isActive: false, hasExpired: true }), MIN)).toBe('regular')
+  expect(isDue(plan, due('due', { isActive: false }), MIN)).toBe(null)
+})
+
+test('a turn reads early only once turns have settled for 30 seconds', async () => {
+  // Read at 0; next slot at 4m (so early reads are worth it until 3m).
+  const plan = { ...readAt(0), nextAt: 4 * MIN }
+  expect(isDue(plan, due('due', { lastTurnAt: 70_000 }), 90_000)).toBe(null)
+  expect(isDue(plan, due('due', { lastTurnAt: 70_000 }), 100_000)).toBe('early')
+  // A turn from before the last read doesn't count.
+  expect(isDue({ ...plan, lastAt: 80_000 }, due('due', { lastTurnAt: 70_000 }), 150_000)).toBe(null)
+  // Not with the next slot under a minute away: that slot is near enough.
+  expect(isDue(readAt(0), due('due', { lastTurnAt: 70_000 }), 100_000)).toBe(null)
+})
+
+test('an early read takes the next slot, so reads never beat the regular rate', async () => {
+  const plan = readAt(0)
+  const early = settleShared(
+    { ...EMPTY_SHARED, schedule: plan },
+    { ok: true, at: 70_000, status: 200, snapshot: parseUsage(BODY, 70_000), raw: BODY },
+    70_000,
+    'early',
+  )
+  expect(early.schedule.nextAt).toBe(2 * ACTIVE_POLL_MS)
+})
+
+test('a message every 40 seconds for an hour reads no more than once per slot', async () => {
+  // Simulate one session: the 15-second timer, turns ending every 40s.
+  let plan = readAt(0)
+  let reads = 1
+  let lastTurnAt = 0
+  for (let now = 0; now <= 60 * MIN; now += 15_000) {
+    if (now % 40_000 < 15_000) lastTurnAt = now
+    const kind = isDue(plan, due('due', { lastTurnAt }), now)
+    if (kind === null) continue
+    reads += 1
+    plan = settleShared(
+      { ...EMPTY_SHARED, schedule: plan },
+      { ok: true, at: now, status: 200, snapshot: parseUsage(BODY, now), raw: BODY },
+      now,
+      kind,
+    ).schedule
+  }
+  expect(reads).toBeLessThanOrEqual(1 + 60 * MIN / ACTIVE_POLL_MS)
 })
 
 test('classifies failures', async () => {
@@ -118,7 +162,7 @@ test('a slow failure never overwrites a success another session wrote meanwhile'
     snapshot: fresh,
     schedule: { ...EMPTY_SCHEDULE, lastAt: 5 * MIN },
   }
-  const settled = settleShared(latest, { ok: false, at: 6 * MIN, status: 429, kind: 'rate-limited', retryAfterMs: null }, 4 * MIN)
+  const settled = settleShared(latest, { ok: false, at: 6 * MIN, status: 429, kind: 'rate-limited', retryAfterMs: null }, 4 * MIN, 'regular')
   expect(settled.snapshot).toBe(fresh)
   expect(settled.failure).toBe(null)
   expect(settled.schedule.backoffMs).toBe(0)
@@ -129,8 +173,13 @@ test('an older success never replaces newer figures', async () => {
   const newer = parseUsage(BODY, 6 * MIN)
   const latest = { ...EMPTY_SHARED, snapshot: newer }
   const older = parseUsage(BODY, 5 * MIN)
-  const settled = settleShared(latest, { ok: true, at: 5 * MIN, status: 200, snapshot: older, raw: BODY }, 4 * MIN)
+  const settled = settleShared(latest, { ok: true, at: 5 * MIN, status: 200, snapshot: older, raw: BODY }, 4 * MIN, 'regular')
   expect(settled.snapshot).toBe(newer)
+})
+
+test('a 0.3.0 schedule without a slot gets one a poll after its last read', async () => {
+  const old = { ...EMPTY_SHARED, schedule: { lastAt: 5 * MIN, backoffMs: 0, retryAt: 0, leaseUntil: 0 } }
+  expect(readShared(old).schedule.nextAt).toBe(5 * MIN + ACTIVE_POLL_MS)
 })
 
 test('a store from another version starts over', async () => {

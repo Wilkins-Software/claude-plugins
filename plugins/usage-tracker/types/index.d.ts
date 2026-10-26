@@ -49,6 +49,8 @@ export type Attempt = {
 export type Schedule = {
   /** Epoch ms of the last attempt, failed or not. */
   lastAt: number
+  /** Epoch ms of the next regular read's slot. */
+  nextAt: number
   /** Current backoff after consecutive failures; 0 when healthy. */
   backoffMs: number
   /** Epoch ms before which nobody retries; 0 when healthy. */
