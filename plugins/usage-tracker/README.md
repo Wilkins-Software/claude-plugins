@@ -8,6 +8,8 @@ Shows your Claude plan usage in a band above the prompt in Claude Code: the 5-ho
 ╰───────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
+On narrower terminals the windows stack, one per line, with labels, bars and percentages lined up. The bars shrink to fit, `resets` becomes `↻`, and on very narrow terminals the countdowns are dropped.
+
 ## How it stays current
 
 - Reads the same usage endpoint as the claude.ai usage page, using the session's own login. It reads once when the session starts, every 60 seconds after that, and again after each turn (at most once every 15 seconds).

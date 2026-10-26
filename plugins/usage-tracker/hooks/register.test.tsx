@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { formatRemaining, mergeRateLimits, parseUsage } from './register'
+import { formatRemaining, layoutFor, mergeRateLimits, parseUsage } from './register'
 
 const BODY = JSON.stringify({
   five_hour: { utilization: 3, resets_at: '2026-10-26T17:39:59Z' },
@@ -38,6 +38,17 @@ test('header figures only raise a window until it resets', async () => {
   expect(higher?.windows[1]?.percent).toBe(30)
 })
 
+test('one row when it fits, an aligned stack when it does not', async () => {
+  const { windows } = parseUsage(BODY, 0)
+  const resets = ['3h10m', '4d11h', '4d11h']
+  expect(layoutFor(windows, resets, 120).mode).toBe('row')
+  const stack = layoutFor(windows, resets, 80)
+  expect(stack).toMatchObject({ mode: 'stack', labelWidth: 5, resetsPrefix: 'resets ' })
+  expect(stack.barWidth).toBeLessThanOrEqual(20)
+  expect(layoutFor(windows, resets, 30).resetsPrefix).toBe('↻ ')
+  expect(layoutFor(windows, resets, 20).resetsPrefix).toBe(null)
+})
+
 test('formats countdowns', async () => {
   expect(formatRemaining(90 * 60_000)).toBe('1h30m')
   expect(formatRemaining(4 * 86_400_000 + 3 * 3_600_000)).toBe('4d3h')
@@ -63,8 +74,8 @@ test('draws the band from a stored snapshot', async ($, on) => {
         view: {},
       },
     })
-    expect((await ui.find({ type: 'Text', text: 'Fable' }))?.text).toBe('Fable')
-    expect((await ui.find({ type: 'Text', text: '38%' }))?.text).toBe('38%')
+    expect((await ui.find({ type: 'Text', text: /^Fable/ }))?.text).toBe('Fable ')
+    expect((await ui.find({ type: 'Text', text: /38%/ }))?.text).toBe('38%')
     await ui.unmount()
   }
 })

@@ -9,6 +9,9 @@ const TICK_MS = 30_000
 // A turn's end refetches, but no sooner than this after the last read.
 const MIN_REFETCH_MS = 15_000
 const BAR_WIDTH = 10
+// The band's border and its horizontal padding.
+const FRAME_COLUMNS = 6
+const SEPARATOR = '  │  '
 
 const snapshot = atom({ plugin: 'usage-tracker', key: 'snapshot' } as const, null)
 const error = atom({ plugin: 'usage-tracker', key: 'error' } as const, null)
@@ -127,10 +130,57 @@ export function formatRemaining(ms: number): string {
   return `${mins}m`
 }
 
-function bar(percent: number): { filled: string; empty: string } {
-  const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((percent / 100) * BAR_WIDTH)))
+function bar(percent: number, width: number): { filled: string; empty: string } {
+  const filled = Math.max(0, Math.min(width, Math.round((percent / 100) * width)))
 
-  return { filled: '━'.repeat(filled), empty: '━'.repeat(BAR_WIDTH - filled) }
+  return { filled: '━'.repeat(filled), empty: '━'.repeat(width - filled) }
+}
+
+export type Layout = {
+  /** One line with separators, or one aligned line per window. */
+  mode: 'row' | 'stack'
+  barWidth: number
+  /** Labels are padded to this in a stack so the bars line up. */
+  labelWidth: number
+  /** `resets ` when there's room, `↻ ` when tight; null drops the countdown. */
+  resetsPrefix: string | null
+}
+
+function percentText(percent: number): string {
+  return `${Math.round(percent)}%`
+}
+
+// Picks the roomiest layout that fits `columns`, the band's width.
+export function layoutFor(windows: UsageWindow[], resets: (string | null)[], columns: number): Layout {
+  const inner = columns - FRAME_COLUMNS
+  const resetsWidth = (prefix: string, index: number) => {
+    const text = resets[index]
+
+    return text == null ? 0 : 1 + prefix.length + text.length
+  }
+
+  const rowWidth = windows.reduce(
+    (sum, window, index) =>
+      sum +
+      (index > 0 ? SEPARATOR.length : 0) +
+      window.label.length + 1 + BAR_WIDTH + 1 + percentText(window.percent).length +
+      resetsWidth('resets ', index),
+    0,
+  )
+  const labelWidth = Math.max(0, ...windows.map(window => window.label.length))
+  if (rowWidth <= inner) {
+    return { mode: 'row', barWidth: BAR_WIDTH, labelWidth, resetsPrefix: 'resets ' }
+  }
+
+  // Stacked: label, bar, a right-aligned percent, then the countdown.
+  const fixed = labelWidth + 1 + 1 + '100%'.length
+  for (const [prefix, minBar] of [['resets ', 8], ['↻ ', 4]] as const) {
+    const widest = Math.max(0, ...windows.map((_, index) => resetsWidth(prefix, index)))
+    const barWidth = Math.min(20, inner - fixed - widest)
+    if (barWidth >= minBar) return { mode: 'stack', barWidth, labelWidth, resetsPrefix: prefix }
+  }
+
+  return { mode: 'stack', barWidth: Math.max(3, Math.min(20, inner - fixed)), labelWidth, resetsPrefix: null }
 }
 
 function colorFor(percent: number): 'success' | 'warning' | 'error' {
@@ -242,24 +292,30 @@ export const register: Register = on => {
       )
     }
     const now = await $.clock.now()
+    const resets = current.windows.map(window =>
+      window.resetsAt === null ? null : formatRemaining(window.resetsAt - now),
+    )
+    const layout = layoutFor(current.windows, resets, e.props.bodyColumns)
+    const isStack = layout.mode === 'stack'
 
     return (
-      <Box {...frame} flexDirection="row" flexWrap="wrap" columnGap={2}>
+      <Box {...frame} flexDirection={isStack ? 'column' : 'row'}>
         {current.windows.map((window, index) => {
           const color = colorFor(window.percent)
-          const { filled, empty } = bar(window.percent)
+          const { filled, empty } = bar(window.percent, layout.barWidth)
+          const label = isStack ? window.label.padEnd(layout.labelWidth) : window.label
+          const percent = percentText(window.percent)
+          const countdown = resets[index]
 
           return (
-            <Box key={window.id} flexDirection="row" columnGap={1}>
-              {index > 0 && <Text dimColor>│</Text>}
-              <Text bold>{window.label}</Text>
-              <Text>
-                <Text color={color}>{filled}</Text>
-                <Text dimColor>{empty}</Text>
-              </Text>
-              <Text color={color} bold>{`${Math.round(window.percent)}%`}</Text>
-              {window.resetsAt !== null && (
-                <Text dimColor>{`resets ${formatRemaining(window.resetsAt - now)}`}</Text>
+            <Box key={window.id} flexDirection="row">
+              {!isStack && index > 0 && <Text dimColor>{SEPARATOR}</Text>}
+              <Text bold>{`${label} `}</Text>
+              <Text color={color}>{filled}</Text>
+              <Text dimColor>{`${empty} `}</Text>
+              <Text color={color} bold>{isStack ? percent.padStart(4) : percent}</Text>
+              {layout.resetsPrefix !== null && countdown != null && (
+                <Text dimColor>{` ${layout.resetsPrefix}${countdown}`}</Text>
               )}
             </Box>
           )
