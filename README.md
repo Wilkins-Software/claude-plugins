@@ -11,15 +11,16 @@ claude plugin marketplace add Wilkins-Software/claude-plugins
 # Install a plugin from it
 claude plugin install <plugin>@wilkins-software
 
-# Pull new versions
+# Pull new versions (installs don't follow pushes)
 claude plugin marketplace update wilkins-software
+claude plugin update <plugin>@wilkins-software   # then /reload-plugins
 ```
 
 ## Plugins
 
 | Plugin | Description |
 | ------ | ----------- |
-| [usage-tracker](plugins/usage-tracker) | Live plan usage above the prompt: 5h session, weekly, and per-model weekly bars with reset countdowns. |
+| [usage-tracker](plugins/usage-tracker) | A mod that shows live plan usage above the prompt: 5h session, weekly and per-model (Fable) bars, reset countdowns, pace warnings and threshold toasts. Reads are shared across sessions and rate-limit safe. |
 
 ## Layout
 

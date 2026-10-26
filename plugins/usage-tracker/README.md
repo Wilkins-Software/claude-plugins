@@ -57,5 +57,24 @@ How it recovers:
 
 ```sh
 claude plugin marketplace add Wilkins-Software/claude-plugins
-claude plugin install usage-tracker@wilkins-software
+claude plugin install usage-tracker@wilkins-software --scope user
 ```
+
+## Update
+
+Installs don't follow pushes. To get a new version:
+
+```sh
+claude plugin marketplace update wilkins-software
+claude plugin update usage-tracker@wilkins-software
+```
+
+Then run `/reload-plugins` in each open session, or start a new one.
+
+## Development
+
+- `hooks/register.tsx` handles the wiring: hooks, timers, the shared store and drawing. The logic lives in pure modules: `hooks/usage.ts` (parsing, header merges, estimates, crossings, pace), `hooks/schedule.ts` (when to read, backoff, the merge after a read, status) and `hooks/layout.ts` (width and height fitting). `types/index.d.ts` is the state contract.
+- Tests: `claude plugin test plugins/usage-tracker`. Validate: `claude plugin validate plugins/usage-tracker`.
+- The shared store is `~/.claude/plugins/store/usage-tracker_<source>-<hash>.json`. Each install source gets its own file, so a dev copy and the installed copy never share reads.
+- Saved figures carry `SNAPSHOT_VERSION` (`hooks/usage.ts`). Bump it whenever `Snapshot` or `UsageWindow` change: state and the store outlive a reload, and older shapes are dropped instead of trusted.
+- The usage endpoint isn't a public API, and it rate-limits. Keep reads in the shared slots, and test with `/usage-raw` when the response shape changes.

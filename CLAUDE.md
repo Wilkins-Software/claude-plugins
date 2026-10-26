@@ -7,3 +7,13 @@ Claude Code plugin marketplace named `wilkins-software`. Manifest: `.claude-plug
 - Keep `version` in `plugin.json` and the marketplace entry in sync; bump it on every change you want installs to receive.
 - Run `claude plugin validate .` (and `claude plugin validate plugins/<name>`) before committing.
 - Update the plugin table in `README.md` when adding or removing a plugin.
+
+## Mods (hooks-module plugins)
+
+Some plugins here are mods: a `hooks/hooks.json` naming a TypeScript hooks module (`export const register: Register = on => {...}`), as `usage-tracker` is.
+
+- Test with `claude plugin test plugins/<name>` (`*.test.ts(x)`, kit from `claude-code/testing`), and run `claude plugin validate` too, since it catches engine rules tsc doesn't: `$` may only be passed to top-level functions, and hooks may not shadow `next`.
+- Slash command names can't contain `:`.
+- `$.state` and `$.store` outlive reloads and versions. Version anything saved and validate it on read instead of trusting old shapes.
+- `$.store` is one JSON file per install source (`~/.claude/plugins/store/<name>_<source>-<hash>.json`). Concurrent sessions of the same install do see each other's writes (verified for usage-tracker).
+- While iterating in a session, a dev copy lives under `~/.claude/dev-mods/<session>/`. Copy it into `plugins/<name>/` without `.claude-plugin/types/` or `tsconfig.json` (engine-generated). After pushing, run `claude plugin marketplace update wilkins-software && claude plugin update <name>@wilkins-software`, then `/reload-plugins`.
