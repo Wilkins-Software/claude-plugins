@@ -1,15 +1,26 @@
+export type WindowKind = 'session' | 'weekly' | 'scoped'
+
 export type UsageWindow = {
-  /** The API's key: `five_hour`, `seven_day`, `seven_day_<model>`. */
+  /** `five_hour`, `seven_day`, or `<limit kind>:<scope name>`. */
   id: string
+  kind: WindowKind
   label: string
   percent: number
   /** Epoch ms; null when the API gave none. */
   resetsAt: number | null
+  /** How long the window runs, for pace; null when unknown. */
+  periodMs: number | null
+  /** A scoped window's allowance as a fraction of the weekly limit (0.5). */
+  weeklyShare: number | null
+  /** Lower-case model name a scoped window counts (`fable`); null otherwise. */
+  model: string | null
+  /** True once moved by a local estimate since the last real read. */
+  isEstimate: boolean
 }
 
 export type Snapshot = {
   windows: UsageWindow[]
-  /** Epoch ms of the last successful read. */
+  /** Epoch ms of the read these figures came from. */
   fetchedAt: number
 }
 
@@ -24,12 +35,22 @@ export type Failure = {
 }
 
 export type Schedule = {
-  /** Epoch ms before which timers and turns don't read again. */
-  nextAt: number
-  /** Current backoff after consecutive failures; 0 when healthy. */
-  backoffMs: number
   /** Epoch ms of the last attempt, failed or not. */
   lastAt: number
+  /** Current backoff after consecutive failures; 0 when healthy. */
+  backoffMs: number
+  /** Epoch ms before which nobody retries; 0 when healthy. */
+  retryAt: number
+  /** Epoch ms until which one session holds the read; others wait. */
+  leaseUntil: number
+}
+
+/** What every session shares through the plugin's store. */
+export type Shared = {
+  snapshot: Snapshot | null
+  failure: Failure | null
+  schedule: Schedule
+  raw: string | null
 }
 
 declare module 'claude-code' {
@@ -37,11 +58,9 @@ declare module 'claude-code' {
     'usage-tracker': {
       snapshot: Snapshot | null
       failure: Failure | null
-      /** Kept in state so a reload honours a backoff instead of refetching at once. */
-      schedule: Schedule
       /** Bumped by the clock so countdowns redraw between reads. */
       tick: number
-      /** Raw body of the last usage response, for /usage-tracker:raw. */
+      /** Raw body of the last usage response, for /usage-raw. */
       raw: string | null
     }
   }
