@@ -35,6 +35,8 @@ const CHECK_MS = 15_000
 const TICK_MS = 30_000
 // A read that hasn't answered by now counts as a network failure.
 const FETCH_TIMEOUT_MS = 20_000
+// The docked pane's ground, read off a screenshot: the engine does not expose it.
+const PANE_BACKGROUND = '#24252a'
 // Store keys, shared by every session running this mod.
 const SHARED_KEY = 'shared'
 const NOTIFIED_KEY = 'notified'
@@ -266,6 +268,8 @@ export const register: Register = on => {
     const frame = (fit: Fit) => ({
       borderStyle: fit.hasBorder ? 'round' : undefined,
       borderDimColor: true,
+      // Fullscreen docks panes on a darker ground; the band matches it there.
+      backgroundColor: e.viewport?.isFullscreen ? PANE_BACKGROUND : undefined,
       paddingX: fit.hasBorder ? 2 : 0,
       marginTop: fit.hasMargin ? 1 : 0,
     })
