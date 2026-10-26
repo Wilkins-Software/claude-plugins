@@ -17,23 +17,21 @@ const raw = atom({ plugin: 'usage-tracker', key: 'raw' } as const, null)
 
 type ApiWindow = { utilization?: number | null; resets_at?: string | null } | null
 
-// Windows the API reports that aren't a model's own weekly limit.
-const SKIPPED = new Set(['seven_day_oauth_apps', 'extra_usage'])
-
-function labelFor(id: string): string {
-  if (id === 'five_hour') return '5h'
-  if (id === 'seven_day') return 'week'
-  const model = id.replace(/^seven_day_/, '')
-
-  return model.charAt(0).toUpperCase() + model.slice(1)
+type ApiLimit = {
+  kind: string
+  percent?: number | null
+  resets_at?: string | null
+  scope?: {
+    model?: { display_name?: string | null } | null
+    surface?: { display_name?: string | null } | string | null
+  } | null
 }
 
-function order(id: string): number {
-  if (id === 'five_hour') return 0
-  if (id === 'seven_day') return 1
+type ApiBody = Record<string, unknown> & { limits?: ApiLimit[] }
 
-  return 2
-}
+// `limits` kinds that match a rate-limit header's window, so header figures
+// can be folded into them between reads.
+const HEADER_IDS: Record<string, string> = { session: 'five_hour', weekly_all: 'seven_day' }
 
 function parseTime(iso: string | null | undefined): number | null {
   if (!iso) return null
@@ -42,23 +40,49 @@ function parseTime(iso: string | null | undefined): number | null {
   return Number.isNaN(ms) ? null : ms
 }
 
-export function parseUsage(body: string, fetchedAt: number): Snapshot {
-  const json = JSON.parse(body) as Record<string, ApiWindow>
-  const windows: UsageWindow[] = []
+function scopeName(limit: ApiLimit): string | null {
+  const surface = limit.scope?.surface
 
-  for (const [id, value] of Object.entries(json)) {
-    const isWindow = id === 'five_hour' || id.startsWith('seven_day')
-    if (!isWindow || SKIPPED.has(id) || !value || typeof value.utilization !== 'number') {
-      continue
-    }
-    windows.push({
-      id,
-      label: labelFor(id),
-      percent: value.utilization,
-      resetsAt: parseTime(value.resets_at),
-    })
+  return (
+    limit.scope?.model?.display_name ??
+    (typeof surface === 'string' ? surface : surface?.display_name) ??
+    null
+  )
+}
+
+function fromLimit(limit: ApiLimit): UsageWindow | null {
+  if (typeof limit.percent !== 'number') return null
+  const resetsAt = parseTime(limit.resets_at)
+  const headerId = HEADER_IDS[limit.kind]
+  if (headerId) {
+    const label = headerId === 'five_hour' ? '5h' : 'week'
+
+    return { id: headerId, label, percent: limit.percent, resetsAt }
   }
-  windows.sort((a, b) => order(a.id) - order(b.id) || a.label.localeCompare(b.label))
+  const name = scopeName(limit)
+  if (!name) return null
+
+  return { id: `${limit.kind}:${name}`, label: name, percent: limit.percent, resetsAt }
+}
+
+// Older responses had no `limits`: just the plan-wide windows.
+function fromLegacy(json: ApiBody): UsageWindow[] {
+  const windows: UsageWindow[] = []
+  for (const [id, label] of [['five_hour', '5h'], ['seven_day', 'week']] as const) {
+    const value = json[id] as ApiWindow | undefined
+    if (value && typeof value.utilization === 'number') {
+      windows.push({ id, label, percent: value.utilization, resetsAt: parseTime(value.resets_at) })
+    }
+  }
+
+  return windows
+}
+
+export function parseUsage(body: string, fetchedAt: number): Snapshot {
+  const json = JSON.parse(body) as ApiBody
+  const windows = Array.isArray(json.limits)
+    ? json.limits.map(fromLimit).filter((w): w is UsageWindow => w !== null)
+    : fromLegacy(json)
 
   return { windows, fetchedAt }
 }
@@ -205,7 +229,7 @@ export const register: Register = on => {
 
     if (current === null) {
       return (
-        <Box>
+        <Box marginTop={1}>
           <Text dimColor>{failure ? `usage: ${failure}` : 'usage: loading…'}</Text>
         </Box>
       )
@@ -213,7 +237,7 @@ export const register: Register = on => {
     const now = await $.clock.now()
 
     return (
-      <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+      <Box flexDirection="row" flexWrap="wrap" columnGap={2} marginTop={1}>
         {current.windows.map(window => (
           <Box key={window.id} flexDirection="row" columnGap={1}>
             <Text dimColor>{window.label}</Text>

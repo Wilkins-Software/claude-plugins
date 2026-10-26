@@ -3,18 +3,31 @@ import { expect, mock, test } from 'claude-code/testing'
 import { formatRemaining, mergeRateLimits, parseUsage } from './register'
 
 const BODY = JSON.stringify({
-  five_hour: { utilization: 3, resets_at: '2026-10-26T20:40:00Z' },
-  seven_day: { utilization: 28, resets_at: '2026-10-31T05:00:00Z' },
-  seven_day_fable: { utilization: 38.4, resets_at: '2026-10-31T05:00:00Z' },
+  five_hour: { utilization: 3, resets_at: '2026-10-26T17:39:59Z' },
+  seven_day: { utilization: 28, resets_at: '2026-10-31T01:59:59Z' },
   seven_day_opus: null,
-  seven_day_oauth_apps: { utilization: 0, resets_at: null },
-  extra_usage: { is_enabled: false },
+  iguana_necktie: { utilization: 50.9, resets_at: '2026-11-05T07:59:00Z' },
+  limits: [
+    { kind: 'session', percent: 3, resets_at: '2026-10-26T17:39:59Z', scope: null },
+    { kind: 'weekly_all', percent: 28, resets_at: '2026-10-31T01:59:59Z', scope: null },
+    {
+      kind: 'weekly_scoped',
+      percent: 38,
+      resets_at: '2026-10-31T01:59:59Z',
+      scope: { model: { id: null, display_name: 'Fable' }, surface: null },
+    },
+  ],
 })
 
-test('parses the windows, model windows after the plan-wide ones', async () => {
+test('reads the limits the usage page shows, Fable included', async () => {
   const { windows } = parseUsage(BODY, 0)
   expect(windows.map(w => w.label)).toEqual(['5h', 'week', 'Fable'])
-  expect(windows[2]?.percent).toBe(38.4)
+  expect(windows[2]?.percent).toBe(38)
+})
+
+test('falls back to the plan-wide windows without limits', async () => {
+  const body = JSON.stringify({ five_hour: { utilization: 5, resets_at: null }, seven_day: null })
+  expect(parseUsage(body, 0).windows.map(w => w.label)).toEqual(['5h'])
 })
 
 test('header figures only raise a window until it resets', async () => {

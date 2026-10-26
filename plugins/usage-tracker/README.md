@@ -1,6 +1,6 @@
 # usage-tracker
 
-Shows your Claude plan usage in a band above the prompt in Claude Code: the 5-hour session window, the weekly all-models window, and any per-model weekly limit (such as Fable). Each one has a bar, a percentage and a countdown to its reset.
+Shows your Claude plan usage in a band above the prompt in Claude Code: the 5-hour session window, the weekly all-models window, and any model-scoped weekly limit your plan has (such as Fable), read from the same `limits` list the usage page draws. Each one has a bar, a percentage and a countdown to its reset.
 
 ```
 5h ██░░░░░░░░ 18% ↻ 3h12m   week ███░░░░░░░ 28% ↻ 4d6h   Fable ████░░░░░░ 38% ↻ 4d6h
