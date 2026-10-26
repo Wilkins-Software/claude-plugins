@@ -20,6 +20,7 @@ claude plugin update <plugin>@wilkins-software   # then /reload-plugins
 
 | Plugin | Description |
 | ------ | ----------- |
+| [session-sidebar](plugins/session-sidebar) | A mod that docks a sidebar beside the chat: model, effort and context fill, prompt-cache status with cold-write costs, and a todo list of the tasks you've given Claude this session, kept by Claude through a tool. |
 | [usage-tracker](plugins/usage-tracker) | A mod that shows live plan usage above the prompt: 5h session, weekly and per-model (Fable) bars, reset countdowns, pace warnings and threshold toasts. Reads are shared across sessions and rate-limit safe. |
 
 ## Layout

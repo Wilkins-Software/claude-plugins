@@ -25,6 +25,7 @@ In short panes, such as a split terminal, the band fits the rows it's given inst
 - A toast when any window crosses 80%, 90% or 100%. Each one shows once per reset, across all sessions.
 - A yellow line when a window is on pace to run out before it resets, for example `Fable runs out in ~2d3h at this pace (resets in 4d11h)`. It stays quiet for the first tenth of a window, while there's too little data to project from.
 - To collapse the band, click `[-]` beside it or press ctrl+x ctrl+a. This is built into Claude Code.
+- In the fullscreen layout the band sits on the same dark background as a docked pane (such as [session-sidebar](../session-sidebar)). Claude Code doesn't tell mods that colour, so it's a constant, `PANE_BACKGROUND` in `hooks/register.tsx`, read off a screenshot. The frame there is drawn by hand from `╭─╮│╰╯`, because a Box's own border leaves its cells on the terminal's background.
 
 ## When a read fails
 

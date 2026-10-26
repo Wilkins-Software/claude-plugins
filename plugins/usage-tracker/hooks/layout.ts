@@ -2,7 +2,7 @@ import type { UsageWindow } from '../types'
 
 const BAR_WIDTH = 10
 // The band's border and its horizontal padding.
-const FRAME_COLUMNS = 6
+export const FRAME_COLUMNS = 6
 export const SEPARATOR = '  │  '
 
 export function bar(percent: number, width: number): { filled: string; empty: string } {
@@ -63,7 +63,8 @@ export function layoutFor(windows: UsageWindow[], resets: (string | null)[], col
     if (barWidth >= minBar) return { mode: 'stack', barWidth, labelWidth, resetsPrefix: prefix }
   }
 
-  return { mode: 'stack', barWidth: Math.max(3, Math.min(20, inner - fixed)), labelWidth, resetsPrefix: null }
+  // Never wider than what's left, so a line can't outgrow a narrow band.
+  return { mode: 'stack', barWidth: Math.max(1, Math.min(20, inner - fixed)), labelWidth, resetsPrefix: null }
 }
 
 export type Fit = {

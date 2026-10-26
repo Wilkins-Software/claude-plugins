@@ -175,3 +175,31 @@ test('draws the band on every surface', async ($, on) => {
     await ui.unmount()
   }
 })
+
+test('in fullscreen the frame is drawn by hand on the pane background, edge to edge', async ($, on) => {
+  const clock = mock.clock(on, { now: 10 * MIN })
+  mock.store(on, {
+    shared: {
+      snapshot: parseUsage(BODY, 9 * MIN),
+      failure: null,
+      schedule: { lastAt: 9 * MIN, backoffMs: 0, retryAt: 0, leaseUntil: 0 },
+      raw: BODY,
+    },
+  })
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(0)
+
+  const ui = await $.ui.mount({
+    ...BAND,
+    surface: 'terminal',
+    viewport: { columns: 120, rows: 40, isFullscreen: true },
+  })
+  const top = await ui.find({ type: 'Text', text: /^╭/ })
+  expect(top?.text.length).toBe(BAND.props.bodyColumns)
+  expect(top?.props).toMatchObject({ backgroundColor: '#24252a' })
+  // One side cell per body row: the bars stack or not, plus no extra lines here.
+  const side = await ui.find({ type: 'Text', text: /^│/ })
+  expect(side?.text).toBe('│')
+  await ui.unmount()
+})

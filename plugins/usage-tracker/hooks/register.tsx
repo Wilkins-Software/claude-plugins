@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Failure, Shared, Snapshot } from '../types'
-import { SEPARATOR, bar, colorFor, fitHeight, layoutFor, percentText } from './layout'
+import { FRAME_COLUMNS, SEPARATOR, bar, colorFor, fitHeight, layoutFor, percentText } from './layout'
 import type { Fit } from './layout'
 import {
   ACTIVE_FOR_MS,
@@ -268,7 +268,7 @@ export const register: Register = on => {
     // Fullscreen docks panes on a darker ground and the band matches it there. A Box's
     // own border leaves its cells on the terminal's ground, so that frame is drawn by hand.
     const framed = (fit: Fit, rows: number, body: RenderChildren) => {
-      if (!e.viewport?.isFullscreen || !fit.hasBorder) {
+      if (!e.viewport?.isFullscreen || !fit.hasBorder || e.props.bodyColumns <= FRAME_COLUMNS) {
         return (
           <Box
             borderStyle={fit.hasBorder ? 'round' : undefined}
@@ -294,7 +294,7 @@ export const register: Register = on => {
           {edge(`╭${across}╮`)}
           <Box flexDirection="row">
             {edge(side)}
-            <Box flexDirection="column" flexGrow={1} paddingX={2}>
+            <Box flexDirection="column" flexGrow={1} flexShrink={1} paddingX={2} overflow="hidden">
               {body}
             </Box>
             {edge(side)}
@@ -307,13 +307,13 @@ export const register: Register = on => {
     const status = health(failed, attempts, current?.fetchedAt ?? null, now)
     // Recent reads as blocks, then what went wrong and what happens next.
     const statusRow = status && (
-      <Box flexDirection="row">
+      <Box flexDirection="row" height={1} overflow="hidden">
         {status.blocks.map((isOk, index) => (
           <Box key={`attempt-${index}`}>
             <Text color={isOk ? 'success' : 'error'}>■</Text>
           </Box>
         ))}
-        <Text color={status.isWarning ? 'warning' : undefined} dimColor={!status.isWarning} bold>
+        <Text color={status.isWarning ? 'warning' : undefined} dimColor={!status.isWarning} bold wrap="truncate-end">
           {`${status.blocks.length > 0 ? ' ' : ''}${current === null ? 'usage unavailable: ' : ''}${status.headline}`}
         </Text>
         <Text dimColor wrap="truncate-end">
@@ -346,7 +346,7 @@ export const register: Register = on => {
         fit,
         1 + shown.length,
         <Box flexDirection="column">
-          <Box flexDirection="row">
+          <Box flexDirection="row" height={1} overflow="hidden">
             {current.windows.map((window, index) => (
               <Box key={window.id} flexDirection="row" flexShrink={0}>
                 {index > 0 && <Text dimColor> · </Text>}
@@ -374,7 +374,7 @@ export const register: Register = on => {
             const countdown = resets[index]
 
             return (
-              <Box key={window.id} flexDirection="row">
+              <Box key={window.id} flexDirection="row" height={1} overflow="hidden" flexShrink={0}>
                 {!isStack && index > 0 && <Text dimColor>{SEPARATOR}</Text>}
                 <Text bold>{`${label} `}</Text>
                 <Text color={color}>{filled}</Text>
