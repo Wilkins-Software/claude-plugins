@@ -108,3 +108,13 @@ export function windowTodos(items: Todo[], room: number): TodoWindow {
     ? { shown, above: start, below: items.length - start - shown.length }
     : { shown, above: 0, below: 0 }
 }
+
+// Rides along with each prompt the user types, where the model reads it next to
+// the ask; the system prompt's section alone is easy to pass over.
+export function reminder(tool: string, list: Todos): string {
+  return [
+    `Session todo list (the user's sidebar, kept with \`${tool}\`): if this message gives you a task to do, add it as one short item, or mark the matching item active, before you start, and mark it done when it is finished. Skip this for a plain question.`,
+    'Current list:',
+    describe(list),
+  ].join('\n')
+}

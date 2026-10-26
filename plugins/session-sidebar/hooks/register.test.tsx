@@ -76,3 +76,23 @@ test('/clear empties the list', async ($, on) => {
   const read = await $.tool.call({ tool: TOOL, ops: [] } as never)
   expect(read.result).toBe('The todo list is empty.')
 })
+
+test("the user's prompts carry the list; commands and notifications don't", async ($, on) => {
+  mock.clock(on, { now: 0 })
+  engine(on)
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: TOOL, ops: [{ op: 'add', text: 'Fix the bug', status: 'active' }] } as never)
+
+  const typed = await $.prompt.submit({ text: 'and the docs', wait: false, origin: { kind: 'composer' } } as never)
+  expect(typed.context?.at(-1)).toContain('1. [>] Fix the bug')
+  const command = await $.prompt.submit({
+    text: '/sidebar',
+    command: { name: 'sidebar', args: '' },
+    wait: false,
+    origin: { kind: 'composer' },
+  } as never)
+  expect(command.context).toBeUndefined()
+  const notified = await $.prompt.submit({ text: 'done', wait: false, origin: { kind: 'plugin', plugin: 'x' } } as never)
+  expect(notified.context).toBeUndefined()
+})

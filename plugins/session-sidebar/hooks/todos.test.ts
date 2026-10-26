@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Todo, Todos } from '../types'
-import { EMPTY_TODOS, apply, describe, windowTodos } from './todos'
+import { EMPTY_TODOS, apply, describe, reminder, windowTodos } from './todos'
 
 function list(...statuses: Todo['status'][]): Todo[] {
   return statuses.map((status, index) => ({ id: index + 1, text: `task ${index + 1}`, status }))
@@ -89,4 +89,11 @@ test('with everything done the window shows the end', async () => {
   const view = windowTodos(list('done', 'done', 'done', 'done', 'done', 'done'), 4)
   expect(view.shown.at(-1)?.id).toBe(6)
   expect(view.below).toBe(0)
+})
+
+test('the reminder names the tool and lists the items', () => {
+  const text = reminder('mcp__session-sidebar__todo', { nextId: 2, items: [{ id: 1, text: 'Ship it', status: 'pending' }] })
+  expect(text).toContain('`mcp__session-sidebar__todo`')
+  expect(text.endsWith('1. [ ] Ship it')).toBe(true)
+  expect(reminder('t', EMPTY_TODOS)).toContain('The todo list is empty.')
 })

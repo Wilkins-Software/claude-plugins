@@ -4,7 +4,7 @@ import type { EngineInterface, Register, RenderChildren, SessionContextUsage, Ti
 import type { Info, Todo } from '../types'
 import { EMPTY_CACHE, afterStep, cacheState, priceOf } from './cache'
 import { colorFor, compact, duration, effortText, prettyModel, usd } from './format'
-import { EMPTY_TODOS, apply, describe, windowTodos } from './todos'
+import { EMPTY_TODOS, apply, describe, reminder, windowTodos } from './todos'
 
 const PANE = 'session-sidebar'
 const TITLE = 'Session'
@@ -144,6 +144,15 @@ export const register: Register = on => {
     if (!e.tools.includes(TOOL)) return composed
 
     return { sections: [...composed.sections, { id: 'session-sidebar:todo', text: PROMPT, scope: 'session' }] }
+  })
+
+  // The user's own prompts only: not commands, notifications, peers or plugins.
+  on('prompt.submit', async ($, e, next) => {
+    const isUsers = e.origin.kind === 'composer' || e.origin.kind === 'bridge' || e.origin.kind === 'sdk'
+    if (!isUsers || e.command !== undefined || e.isMeta) return next(e)
+    const list = await read($, todos)
+
+    return next({ ...e, context: [...(e.context ?? []), reminder(TOOL, list)] })
   })
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
