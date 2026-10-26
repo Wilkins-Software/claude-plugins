@@ -19,7 +19,7 @@ claude plugin marketplace update wilkins-software
 
 | Plugin | Description |
 | ------ | ----------- |
-| _none yet_ | |
+| [usage-tracker](plugins/usage-tracker) | Live plan usage above the prompt: 5h session, weekly, and per-model weekly bars with reset countdowns. |
 
 ## Layout
 

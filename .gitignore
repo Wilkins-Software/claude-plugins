@@ -3,3 +3,6 @@ node_modules/
 *.log
 .env
 .env.*
+
+# Engine-generated mod types
+.claude-plugin/types/
