@@ -127,10 +127,10 @@ export function formatRemaining(ms: number): string {
   return `${mins}m`
 }
 
-function bar(percent: number): string {
+function bar(percent: number): { filled: string; empty: string } {
   const filled = Math.max(0, Math.min(BAR_WIDTH, Math.round((percent / 100) * BAR_WIDTH)))
 
-  return '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled)
+  return { filled: '━'.repeat(filled), empty: '━'.repeat(BAR_WIDTH - filled) }
 }
 
 function colorFor(percent: number): 'success' | 'warning' | 'error' {
@@ -227,9 +227,16 @@ export const register: Register = on => {
     await read($, tick)
     const { Box, Text } = $.ui.resolve(e)
 
+    const frame = {
+      borderStyle: 'round',
+      borderDimColor: true,
+      paddingX: 2,
+      marginTop: 1,
+    } as const
+
     if (current === null) {
       return (
-        <Box marginTop={1}>
+        <Box {...frame}>
           <Text dimColor>{failure ? `usage: ${failure}` : 'usage: loading…'}</Text>
         </Box>
       )
@@ -237,17 +244,26 @@ export const register: Register = on => {
     const now = await $.clock.now()
 
     return (
-      <Box flexDirection="row" flexWrap="wrap" columnGap={2} marginTop={1}>
-        {current.windows.map(window => (
-          <Box key={window.id} flexDirection="row" columnGap={1}>
-            <Text dimColor>{window.label}</Text>
-            <Text color={colorFor(window.percent)}>{bar(window.percent)}</Text>
-            <Text color={colorFor(window.percent)}>{`${Math.round(window.percent)}%`}</Text>
-            {window.resetsAt !== null && (
-              <Text dimColor>{`↻ ${formatRemaining(window.resetsAt - now)}`}</Text>
-            )}
-          </Box>
-        ))}
+      <Box {...frame} flexDirection="row" flexWrap="wrap" columnGap={2}>
+        {current.windows.map((window, index) => {
+          const color = colorFor(window.percent)
+          const { filled, empty } = bar(window.percent)
+
+          return (
+            <Box key={window.id} flexDirection="row" columnGap={1}>
+              {index > 0 && <Text dimColor>│</Text>}
+              <Text bold>{window.label}</Text>
+              <Text>
+                <Text color={color}>{filled}</Text>
+                <Text dimColor>{empty}</Text>
+              </Text>
+              <Text color={color} bold>{`${Math.round(window.percent)}%`}</Text>
+              {window.resetsAt !== null && (
+                <Text dimColor>{`resets ${formatRemaining(window.resetsAt - now)}`}</Text>
+              )}
+            </Box>
+          )
+        })}
         {failure && <Text color="warning">{`(stale: ${failure})`}</Text>}
       </Box>
     )
