@@ -65,3 +65,35 @@ export function layoutFor(windows: UsageWindow[], resets: (string | null)[], col
 
   return { mode: 'stack', barWidth: Math.max(3, Math.min(20, inner - fixed)), labelWidth, resetsPrefix: null }
 }
+
+export type Fit = {
+  /** The blank row above the band. */
+  hasMargin: boolean
+  hasBorder: boolean
+  /** One line of labels and percentages, no bars. */
+  isCompact: boolean
+  /** How many of the extra lines (pace, status) fit under the bars. */
+  extraLines: number
+}
+
+// Fits the band to `maxRows`, the rows the engine gives it, so it never
+// scrolls behind an `n more`. Gives up the roomiest parts first: the blank
+// row, then the border, then the bars (a boxed one-line summary first, a
+// bare one last); the extra lines go last.
+export function fitHeight(contentRows: number, extraLines: number, maxRows: number): Fit {
+  const options: Fit[] = [
+    { hasMargin: true, hasBorder: true, isCompact: false, extraLines },
+    { hasMargin: false, hasBorder: true, isCompact: false, extraLines },
+    { hasMargin: false, hasBorder: false, isCompact: false, extraLines },
+  ]
+  for (const fit of options) {
+    const rows = (fit.hasMargin ? 1 : 0) + (fit.hasBorder ? 2 : 0) + contentRows + fit.extraLines
+    if (rows <= maxRows) return fit
+  }
+
+  // One line without bars: boxed when there's room, bare when there isn't.
+  if (3 + extraLines <= maxRows) return { hasMargin: false, hasBorder: true, isCompact: true, extraLines }
+
+  return { hasMargin: false, hasBorder: false, isCompact: true, extraLines: Math.max(0, Math.min(extraLines, maxRows - 1)) }
+}
+

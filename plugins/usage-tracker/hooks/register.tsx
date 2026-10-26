@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Failure, Shared, Snapshot } from '../types'
-import { SEPARATOR, bar, colorFor, layoutFor, percentText } from './layout'
+import { SEPARATOR, bar, colorFor, fitHeight, layoutFor, percentText } from './layout'
+import type { Fit } from './layout'
 import {
   ACTIVE_FOR_MS,
   FAILURE_TEXT,
@@ -256,12 +257,13 @@ export const register: Register = on => {
     if (isEmpty || (current === null && failed?.kind === 'no-login')) return next(e)
     const { Box, Text } = $.ui.resolve(e)
 
-    const frame = {
-      borderStyle: 'round',
+    // The frame gives way first when the band is short of rows.
+    const frame = (fit: Fit) => ({
+      borderStyle: fit.hasBorder ? 'round' : undefined,
       borderDimColor: true,
-      paddingX: 2,
-      marginTop: 1,
-    } as const
+      paddingX: fit.hasBorder ? 2 : 0,
+      marginTop: fit.hasMargin ? 1 : 0,
+    })
 
     const status = health(failed, attempts, current?.fetchedAt ?? null, now)
     // Recent reads as blocks, then what went wrong and what happens next.
@@ -283,7 +285,7 @@ export const register: Register = on => {
 
     if (current === null) {
       return (
-        <Box {...frame} flexDirection="column">
+        <Box {...frame(fitHeight(1, 0, e.props.maxRows))} flexDirection="column">
           {statusRow ?? <Text dimColor>usage: loading…</Text>}
         </Box>
       )
@@ -294,9 +296,36 @@ export const register: Register = on => {
     const layout = layoutFor(current.windows, resets, e.props.bodyColumns)
     const isStack = layout.mode === 'stack'
     const pace = paceWarning(current, now)
+    const paceRow = pace && (
+      <Text color="warning" wrap="truncate-end">
+        {`${pace.label} runs out in ~${formatRemaining(pace.runsOutIn)} at this pace (resets in ${formatRemaining(pace.resetsIn)})`}
+      </Text>
+    )
+    // Under the bars; when rows run short the pace line goes before the status.
+    const extras = [paceRow, statusRow].filter(Boolean)
+    const fit = fitHeight(isStack ? current.windows.length : 1, extras.length, e.props.maxRows)
+    const shown = extras.slice(extras.length - fit.extraLines)
+
+    if (fit.isCompact) {
+      return (
+        <Box {...frame(fit)} flexDirection="column">
+          <Box flexDirection="row">
+            {current.windows.map((window, index) => (
+              <Box key={window.id} flexDirection="row" flexShrink={0}>
+                {index > 0 && <Text dimColor> · </Text>}
+                <Text bold>{`${window.label} `}</Text>
+                <Text color={colorFor(window.percent)} bold>{percentText(window)}</Text>
+                {resets[index] != null && <Text dimColor>{` ${resets[index]}`}</Text>}
+              </Box>
+            ))}
+          </Box>
+          {shown}
+        </Box>
+      )
+    }
 
     return (
-      <Box {...frame} flexDirection="column">
+      <Box {...frame(fit)} flexDirection="column">
         <Box flexDirection={isStack ? 'column' : 'row'}>
           {current.windows.map((window, index) => {
             const color = colorFor(window.percent)
@@ -319,12 +348,7 @@ export const register: Register = on => {
             )
           })}
         </Box>
-        {pace && (
-          <Text color="warning" wrap="truncate-end">
-            {`${pace.label} runs out in ~${formatRemaining(pace.runsOutIn)} at this pace (resets in ${formatRemaining(pace.resetsIn)})`}
-          </Text>
-        )}
-        {statusRow}
+        {shown}
       </Box>
     )
   })

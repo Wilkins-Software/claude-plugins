@@ -10,6 +10,8 @@ Shows your Claude plan usage in a band above the prompt in Claude Code: the 5-ho
 
 On narrower terminals the windows stack, one per line, with labels, bars and percentages lined up. The bars shrink to fit, `resets` becomes `↻`, and on very narrow terminals the countdowns are dropped.
 
+In short panes, such as a split terminal, the band fits the rows it's given instead of scrolling behind an `n more`. It drops, in order: the blank line above it, the border, the pace and status lines, and finally the bars, leaving one line like `5h 5% 2h26m · week 28% 4d10h · Fable 38% 4d10h`.
+
 ## How it stays current
 
 - **One read for every session.** Reads of the usage endpoint (the same one the claude.ai usage page uses, called with the session's own login) are shared through the mod's store, which is a local file. Before reading, a session checks whether another one read recently and uses that result if so. A session that does read takes a 30-second hold first, so other sessions wait for it instead of racing it.

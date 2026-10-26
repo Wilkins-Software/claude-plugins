@@ -149,6 +149,21 @@ test('a request that never answers counts as offline after 20 seconds', async ($
   expect(shared.failure?.kind).toBe('network')
 })
 
+test('a band two rows tall shows one line, not an n more', async ($, on) => {
+  mock.clock(on)
+  on('state.get', (_, e, next) =>
+    e.key === 'snapshot' ? { value: { value: parseUsage(BODY, 0), version: 1 } } : next(e),
+  )
+  const ui = await $.ui.mount({
+    ...BAND,
+    surface: 'terminal',
+    props: { ...BAND.props, maxRows: 2, bodyColumns: 60 },
+  })
+  expect((await ui.find({ type: 'Text', text: /━/ }))).toBe(undefined)
+  expect((await ui.find({ type: 'Text', text: /^Fable/ }))?.text).toBe('Fable ')
+  await ui.unmount()
+})
+
 test('draws the band on every surface', async ($, on) => {
   mock.clock(on)
   on('state.get', (_, e, next) =>

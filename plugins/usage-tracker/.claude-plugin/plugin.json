@@ -1,6 +1,6 @@
 {
   "name": "usage-tracker",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Live plan usage above the prompt: 5-hour session, weekly, and per-model weekly limits with reset countdowns.",
   "author": { "name": "Mark Wilkins", "email": "mark@wilkins.software" },
   "repository": "https://github.com/Wilkins-Software/claude-plugins",
