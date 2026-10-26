@@ -102,3 +102,19 @@ test("the user's prompts carry the list; commands and notifications don't", asyn
   const notified = await $.prompt.submit({ text: 'done', wait: false, origin: { kind: 'plugin', plugin: 'x' } } as never)
   expect(notified.context).toBeUndefined()
 })
+
+test('pressing "n more" expands the todo card to show every item', async ($, on) => {
+  mock.clock(on, { now: 0 })
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ops = Array.from({ length: 8 }, (_, index) => ({ op: 'add', text: `Step ${index + 1}` }))
+  await $.tool.call({ tool: TOOL, ops } as never)
+
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, scroll: { offset: 0, bodyRows: 28 } } })
+  expect(await ui.find({ type: 'Text', text: 'Step 8' })).toBeUndefined()
+  await ui.press({ key: 'below' })
+  expect((await ui.find({ type: 'Text', text: 'Step 8' }))?.text).toBe('Step 8')
+  await ui.press({ key: 'toggle' })
+  expect(await ui.find({ type: 'Text', text: 'Step 8' })).toBeUndefined()
+  await ui.unmount()
+})

@@ -15,13 +15,16 @@ const MAX_CARD = 44
 const FRAME_COLUMNS = 6
 // The todo card's border rows and its header.
 const TODO_CHROME_ROWS = 3
+// The context and cache cards above it, borders included.
+const OTHER_CARDS_ROWS = 10
 const TICK_MS = 15_000
 const FRAME_MS = 120
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const PROMPT = `# Session todo list
 
 The user sees a todo list for this session in a sidebar, kept with the \`${TOOL}\` tool.
-- When the user gives you a task to do (not a plain question), add it as one short item (under 60 characters) before you start.
+- When the user gives you a task to do (not a plain question), add it to the list before you start, each item short (under 60 characters).
+- Itemize: one item per distinct step or deliverable the user names, in the order they'll happen, not one item for the whole request. "Move the ticket to in progress, make a branch and draft PR, audit the pages and screenshot each issue, then fix them" is four items or more, not one. A small single-step task is one item.
 - Mark an item \`active\` when you start on it and \`done\` when it is finished; keep one item active at a time.
 - "The todo list", "my todos" and the like mean this list: add, remove, reword or reorder its items with the tool when asked.
 - This is separate from your own TodoWrite planning list; don't mirror every planning step here, only the user's tasks.`
@@ -43,6 +46,8 @@ const cache = atom({ plugin: 'session-sidebar', key: 'cache' } as const, EMPTY_C
 const tick = atom({ plugin: 'session-sidebar', key: 'tick' } as const, 0)
 const frame = atom({ plugin: 'session-sidebar', key: 'frame' } as const, 0)
 const working = atom({ plugin: 'session-sidebar', key: 'working' } as const, false)
+// The user's choice: the todo card shows every item instead of a quarter of the pane.
+const expanded = atom({ plugin: 'session-sidebar', key: 'expanded' } as const, false)
 // The list as the model last read it, from a reminder or the tool's result; null
 // when it has read none in this conversation, or compaction took it away.
 const seen = atom({ plugin: 'session-sidebar', key: 'seen' } as const, null as string | null)
@@ -75,6 +80,10 @@ async function syncSpinner($: EngineInterface): Promise<void> {
     spinner.cancel()
     spinner = null
   }
+}
+
+function toggleTodos($: EngineInterface): void {
+  void update($, expanded, isExpanded => !isExpanded)
 }
 
 export const register: Register = on => {
@@ -247,14 +256,15 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
-    const [value, list, cached, now, spin, isWorking] = await Promise.all([
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const [value, list, cached, now, spin, isWorking, isExpanded] = await Promise.all([
       read($, info),
       read($, todos),
       read($, cache),
       read($, tick),
       read($, frame),
       read($, working),
+      read($, expanded),
     ])
     const cardWidth = Math.min(MAX_CARD, e.props.bodyColumns)
     const inner = Math.max(1, cardWidth - FRAME_COLUMNS)
@@ -294,10 +304,19 @@ export const register: Register = on => {
     const costs =
       price && context > 0 ? `rewrite ${usd((context * price.write) / 1e6)} · warm ${usd((context * price.read) / 1e6)}` : null
 
-    // Todos: at most a quarter of the pane, the window following the active item.
-    const room = Math.floor(e.props.scroll.bodyRows / 4) - TODO_CHROME_ROWS
+    // Todos: at most a quarter of the pane, the window following the active item;
+    // expanded, whatever the cards above leave.
+    const bodyRows = e.props.scroll.bodyRows
+    const collapsedRoom = Math.floor(bodyRows / 4) - TODO_CHROME_ROWS
+    const room = isExpanded ? Math.max(collapsedRoom, bodyRows - OTHER_CARDS_ROWS - TODO_CHROME_ROWS) : collapsedRoom
     const done = list.items.filter(item => item.status === 'done').length
     const view = windowTodos(list.items, room)
+    const canToggle = isExpanded || list.items.length > Math.max(1, collapsedRoom)
+    const more = (key: string, text: string) => (
+      <Button key={key} plain dimColor onPress={() => toggleTodos($)}>
+        {text}
+      </Button>
+    )
     const todoRow = (item: Todo) => {
       const mark =
         item.status === 'done' ? '✔'
@@ -378,16 +397,23 @@ export const register: Register = on => {
           <Box flexDirection="column">
             <Box justifyContent="space-between">
               <Text bold>Todo</Text>
-              {list.items.length > 0 && <Text dimColor>{`${done}/${list.items.length}`}</Text>}
+              <Box>
+                {canToggle && (
+                  <Button key="toggle" plain dimColor hotkey="t" onPress={() => toggleTodos($)}>
+                    {isExpanded ? 'less' : 'all'}
+                  </Button>
+                )}
+                {list.items.length > 0 && <Text dimColor>{`${canToggle ? '  ' : ''}${done}/${list.items.length}`}</Text>}
+              </Box>
             </Box>
             {list.items.length === 0 && (
               <Text dimColor wrap="truncate-end">
                 Tasks you give Claude show here
               </Text>
             )}
-            {view.above > 0 && <Text dimColor>{`↑ ${view.above} more`}</Text>}
+            {view.above > 0 && more('above', `↑ ${view.above} more`)}
             {view.shown.map(todoRow)}
-            {view.below > 0 && <Text dimColor>{`↓ ${view.below} more`}</Text>}
+            {view.below > 0 && more('below', `↓ ${view.below} more`)}
           </Box>,
         )}
       </Box>

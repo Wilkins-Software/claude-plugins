@@ -14,7 +14,7 @@
       "name": "session-sidebar",
       "source": "./plugins/session-sidebar",
       "description": "A sidebar beside the chat: model, effort and context fill, prompt-cache status, and a todo list of the tasks you've given Claude this session.",
-      "version": "0.2.1"
+      "version": "0.3.0"
     },
     {
       "name": "usage-tracker",
