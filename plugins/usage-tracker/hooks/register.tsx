@@ -1,20 +1,31 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
-import type { Snapshot, UsageWindow } from '../types'
+import type { Failure, FailureKind, Schedule, Snapshot, UsageWindow } from '../types'
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
-const POLL_MS = 60_000
+// The usage endpoint rate-limits; the response headers keep 5h and week
+// current between reads, so reading every couple of minutes is plenty.
+const POLL_MS = 120_000
+// How often timers check whether a read is due.
+const CHECK_MS = 15_000
 const TICK_MS = 30_000
-// A turn's end refetches, but no sooner than this after the last read.
-const MIN_REFETCH_MS = 15_000
+// A turn's end may bring the next read forward, to no sooner than this after the last.
+const MIN_REFETCH_MS = 60_000
+const MIN_BACKOFF_MS = 60_000
+const MAX_BACKOFF_MS = 15 * 60_000
+// A failed read stays quiet while the figures are younger than this.
+const QUIET_STALE_MS = 5 * 60_000
+// And turns into a warning once they are older than this.
+const WARN_STALE_MS = 20 * 60_000
 const BAR_WIDTH = 10
 // The band's border and its horizontal padding.
 const FRAME_COLUMNS = 6
 const SEPARATOR = '  │  '
 
 const snapshot = atom({ plugin: 'usage-tracker', key: 'snapshot' } as const, null)
-const error = atom({ plugin: 'usage-tracker', key: 'error' } as const, null)
+const failure = atom({ plugin: 'usage-tracker', key: 'failure' } as const, null)
+const schedule = atom({ plugin: 'usage-tracker', key: 'schedule' } as const, { nextAt: 0, backoffMs: 0, lastAt: 0 })
 const tick = atom({ plugin: 'usage-tracker', key: 'tick' } as const, 0)
 const raw = atom({ plugin: 'usage-tracker', key: 'raw' } as const, null)
 
@@ -190,33 +201,116 @@ function colorFor(percent: number): 'success' | 'warning' | 'error' {
   return 'success'
 }
 
-let lastFetchAt = 0
+export function classify(status: number | null): FailureKind {
+  if (status === null) return 'network'
+  if (status === 429) return 'rate-limited'
+  if (status === 401 || status === 403) return 'auth'
+  if (status >= 500) return 'server'
+
+  return 'bad-response'
+}
+
+// Seconds or an HTTP date, as Retry-After allows.
+export function parseRetryAfter(value: string | undefined, now: number): number | null {
+  if (!value) return null
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)
+  const at = Date.parse(value)
+
+  return Number.isNaN(at) ? null : Math.max(0, at - now)
+}
+
+// Doubles from a minute up to fifteen; a Retry-After the server sent wins
+// when it asks for longer.
+export function backoff(previous: Schedule, retryAfterMs: number | null, now: number): Schedule {
+  const doubled = Math.min(MAX_BACKOFF_MS, Math.max(MIN_BACKOFF_MS, previous.backoffMs * 2))
+  const wait = Math.min(MAX_BACKOFF_MS, Math.max(doubled, retryAfterMs ?? 0))
+
+  return { nextAt: now + wait, backoffMs: doubled, lastAt: now }
+}
+
+const FAILURE_TEXT: Record<FailureKind, string> = {
+  'rate-limited': 'rate-limited',
+  auth: 'login expired, run /login',
+  'no-login': 'needs a claude.ai login',
+  server: 'usage service error',
+  network: 'offline',
+  'bad-response': 'unexpected response',
+}
+
+// A short line under the bars, or null while a failure isn't worth showing.
+export function statusLine(
+  failed: Failure | null,
+  fetchedAt: number | null,
+  now: number,
+): { text: string; isWarning: boolean } | null {
+  if (failed === null) return null
+  const age = fetchedAt === null ? Infinity : now - fetchedAt
+  const needsAction = failed.kind === 'auth' || failed.kind === 'no-login'
+  if (!needsAction && age < QUIET_STALE_MS) return null
+  const parts = [
+    fetchedAt === null ? null : `updated ${formatRemaining(age)} ago`,
+    FAILURE_TEXT[failed.kind],
+    needsAction ? null : `retrying in ${formatRemaining(failed.retryAt - now)}`,
+  ]
+
+  return {
+    text: parts.filter(part => part !== null).join(' · '),
+    isWarning: needsAction || age >= WARN_STALE_MS,
+  }
+}
+
 let isFetching = false
 
-async function refresh($: EngineInterface): Promise<void> {
+async function fail($: EngineInterface, kind: FailureKind, status: number | null, retryAfterMs: number | null) {
+  const now = await $.clock.now()
+  const next = backoff(await read($, schedule), retryAfterMs, now)
+  await update($, schedule, () => next)
+  await update($, failure, () => ({ kind, status, retryAt: next.nextAt }))
+}
+
+// `due` reads only when the schedule says so; `turn` may come in early, but
+// never inside a backoff; `manual` always reads.
+async function refresh($: EngineInterface, reason: 'due' | 'turn' | 'manual'): Promise<void> {
   if (isFetching) return
+  const now = await $.clock.now()
+  const plan = await read($, schedule)
+  if (reason === 'due' && now < plan.nextAt) return
+  if (reason === 'turn' && (plan.backoffMs > 0 || now - plan.lastAt < MIN_REFETCH_MS)) return
   isFetching = true
   try {
     const auth = await $.session.authorize()
     if (!auth || auth.kind !== 'bearer') {
-      await update($, error, () => 'no claude.ai login')
+      await fail($, 'no-login', null, MAX_BACKOFF_MS)
       return
     }
-    const response = await $.http.fetch(USAGE_URL, {
-      auth: auth.handle,
-      headers: { 'anthropic-beta': 'oauth-2025-04-20' },
-    })
-    const now = await $.clock.now()
-    lastFetchAt = now
+    let response
+    try {
+      response = await $.http.fetch(USAGE_URL, {
+        auth: auth.handle,
+        headers: { 'anthropic-beta': 'oauth-2025-04-20' },
+      })
+    } catch {
+      await fail($, 'network', null, null)
+      return
+    }
+    const at = await $.clock.now()
     if (!response.ok) {
-      await update($, error, () => `usage API ${response.status}`)
+      const retryAfter = parseRetryAfter(response.headers['retry-after'], at)
+      await fail($, classify(response.status), response.status, retryAfter)
+      return
+    }
+    let parsed: Snapshot
+    try {
+      parsed = parseUsage(response.text, at)
+    } catch {
+      await fail($, 'bad-response', response.status, null)
       return
     }
     await update($, raw, () => response.text)
-    await update($, snapshot, () => parseUsage(response.text, now))
-    await update($, error, () => null)
-  } catch (cause) {
-    await update($, error, () => (cause instanceof Error ? cause.message : String(cause)))
+    await update($, snapshot, () => parsed)
+    await update($, failure, () => null)
+    await update($, schedule, () => ({ nextAt: at + POLL_MS, backoffMs: 0, lastAt: at }))
   } finally {
     isFetching = false
   }
@@ -232,8 +326,10 @@ export const register: Register = on => {
       name: 'usage-refresh',
       description: 'Re-read plan usage now',
     })
-    void refresh($)
-    $.clock.every(POLL_MS, () => void refresh($))
+    // Reads only when due, so a reload inside a backoff or right after a
+    // read doesn't hit the endpoint again.
+    void refresh($, 'due')
+    $.clock.every(CHECK_MS, () => void refresh($, 'due'))
     $.clock.every(TICK_MS, () => void update($, tick, n => n + 1))
 
     return next(e)
@@ -241,9 +337,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if ((await $.clock.now()) - lastFetchAt >= MIN_REFETCH_MS) {
-      void refresh($)
-    }
+    void refresh($, 'turn')
 
     return result
   })
@@ -264,16 +358,21 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'usage-refresh' }, async $ => {
-    await refresh($)
-    const failure = await read($, error)
+    await refresh($, 'manual')
+    const failed = await read($, failure)
+    if (failed === null) return { text: 'Usage refreshed.' }
+    const now = await $.clock.now()
+    const status = failed.status === null ? '' : ` (HTTP ${failed.status})`
 
-    return { text: failure ? `Usage refresh failed: ${failure}` : 'Usage refreshed.' }
+    return {
+      text: `Usage refresh failed: ${FAILURE_TEXT[failed.kind]}${status}. Next try in ${formatRemaining(failed.retryAt - now)}.`,
+    }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const current = await read($, snapshot)
-    const failure = await read($, error)
+    const failed = await read($, failure)
     await read($, tick)
     const { Box, Text } = $.ui.resolve(e)
 
@@ -284,14 +383,18 @@ export const register: Register = on => {
       marginTop: 1,
     } as const
 
+    const now = await $.clock.now()
+    const status = statusLine(failed, current?.fetchedAt ?? null, now)
+
     if (current === null) {
       return (
         <Box {...frame}>
-          <Text dimColor>{failure ? `usage: ${failure}` : 'usage: loading…'}</Text>
+          <Text color={status?.isWarning ? 'warning' : undefined} dimColor={!status?.isWarning}>
+            {failed ? `usage: ${FAILURE_TEXT[failed.kind]}` : 'usage: loading…'}
+          </Text>
         </Box>
       )
     }
-    const now = await $.clock.now()
     const resets = current.windows.map(window =>
       window.resetsAt === null ? null : formatRemaining(window.resetsAt - now),
     )
@@ -299,28 +402,34 @@ export const register: Register = on => {
     const isStack = layout.mode === 'stack'
 
     return (
-      <Box {...frame} flexDirection={isStack ? 'column' : 'row'}>
-        {current.windows.map((window, index) => {
-          const color = colorFor(window.percent)
-          const { filled, empty } = bar(window.percent, layout.barWidth)
-          const label = isStack ? window.label.padEnd(layout.labelWidth) : window.label
-          const percent = percentText(window.percent)
-          const countdown = resets[index]
+      <Box {...frame} flexDirection="column">
+        <Box flexDirection={isStack ? 'column' : 'row'}>
+          {current.windows.map((window, index) => {
+            const color = colorFor(window.percent)
+            const { filled, empty } = bar(window.percent, layout.barWidth)
+            const label = isStack ? window.label.padEnd(layout.labelWidth) : window.label
+            const percent = percentText(window.percent)
+            const countdown = resets[index]
 
-          return (
-            <Box key={window.id} flexDirection="row">
-              {!isStack && index > 0 && <Text dimColor>{SEPARATOR}</Text>}
-              <Text bold>{`${label} `}</Text>
-              <Text color={color}>{filled}</Text>
-              <Text dimColor>{`${empty} `}</Text>
-              <Text color={color} bold>{isStack ? percent.padStart(4) : percent}</Text>
-              {layout.resetsPrefix !== null && countdown != null && (
-                <Text dimColor>{` ${layout.resetsPrefix}${countdown}`}</Text>
-              )}
-            </Box>
-          )
-        })}
-        {failure && <Text color="warning">{`(stale: ${failure})`}</Text>}
+            return (
+              <Box key={window.id} flexDirection="row">
+                {!isStack && index > 0 && <Text dimColor>{SEPARATOR}</Text>}
+                <Text bold>{`${label} `}</Text>
+                <Text color={color}>{filled}</Text>
+                <Text dimColor>{`${empty} `}</Text>
+                <Text color={color} bold>{isStack ? percent.padStart(4) : percent}</Text>
+                {layout.resetsPrefix !== null && countdown != null && (
+                  <Text dimColor>{` ${layout.resetsPrefix}${countdown}`}</Text>
+                )}
+              </Box>
+            )
+          })}
+        </Box>
+        {status && (
+          <Text color={status.isWarning ? 'warning' : undefined} dimColor={!status.isWarning}>
+            {status.text}
+          </Text>
+        )}
       </Box>
     )
   })
