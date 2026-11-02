@@ -37,6 +37,8 @@ const TICK_MS = 30_000
 const FETCH_TIMEOUT_MS = 20_000
 // The docked pane's ground, read off a screenshot: the engine does not expose it.
 const PANE_BACKGROUND = '#24252a'
+// The bar's length on graphical surfaces, in CSS pixels.
+const GUI_BAR_WIDTH = 80
 // Store keys, shared by every session running this mod.
 const SHARED_KEY = 'shared'
 const NOTIFIED_KEY = 'notified'
@@ -48,6 +50,8 @@ const raw = atom({ plugin: 'usage-tracker', key: 'raw' } as const, null)
 const history = atom({ plugin: 'usage-tracker', key: 'history' } as const, [])
 
 let isFetching = false
+// Whether this load's reads and countdown tick have started.
+let isPolling = false
 let lastActiveAt = 0
 // When this session's last main-loop turn ended, for the early read.
 let lastTurnAt = 0
@@ -176,9 +180,37 @@ async function fetchUsage($: EngineInterface, handle: string): Promise<Outcome> 
   }
 }
 
+// Starts the shared reads and the countdown tick, once per load. The terminal
+// starts them at session start; the desktop app hosts its session the way the
+// SDK does (not interactive), so there the first drawing of the band does.
+async function startPolling($: EngineInterface): Promise<void> {
+  if (isPolling) return
+  isPolling = true
+  lastActiveAt = await $.clock.now()
+  // Reads only when due, so a reload, or a session started while another
+  // read recently, takes the shared figures instead of calling the API. On a
+  // timer, since a read writes state and a render may not.
+  $.clock.after(0, () => void refresh($, 'due'))
+  $.clock.every(CHECK_MS, () => void refresh($, 'due'))
+  $.clock.every(TICK_MS, () => void update($, tick, n => n + 1))
+}
+
+// A rounded bar for graphical surfaces, colored as the terminal's theme keys
+// read on both a light and a dark ground.
+function barSvg(percent: number, color: 'success' | 'warning' | 'error'): string {
+  const fill = { success: '#3fa66b', warning: '#d9a23a', error: '#d9534f' }[color]
+  const filled = Math.max(0, Math.min(GUI_BAR_WIDTH, Math.round((percent / 100) * GUI_BAR_WIDTH)))
+  const head = `<svg xmlns="http://www.w3.org/2000/svg" width="${GUI_BAR_WIDTH}" height="6" viewBox="0 0 ${GUI_BAR_WIDTH} 6">`
+  const track = `<rect width="${GUI_BAR_WIDTH}" height="6" rx="3" fill="#8a8a8a" fill-opacity="0.3"/>`
+  const value = filled > 0 ? `<rect width="${Math.max(6, filled)}" height="6" rx="3" fill="${fill}"/>` : ''
+
+  return `${head}${track}${value}</svg>`
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    // A `-p` run or the SDK has no band to draw: it shouldn't read either.
+    // A `-p` run or the SDK has no band to draw: it shouldn't read either. The
+    // desktop app's session is not interactive either; its band starts the reads.
     if (!e.isInteractive) return next(e)
     await $.command.register({
       name: 'usage-raw',
@@ -188,12 +220,7 @@ export const register: Register = on => {
       name: 'usage-refresh',
       description: 'Re-read plan usage now',
     })
-    lastActiveAt = await $.clock.now()
-    // Reads only when due, so a reload, or a session started while another
-    // read recently, takes the shared figures instead of calling the API.
-    void refresh($, 'due')
-    $.clock.every(CHECK_MS, () => void refresh($, 'due'))
-    $.clock.every(TICK_MS, () => void update($, tick, n => n + 1))
+    await startPolling($)
 
     return next(e)
   })
@@ -254,6 +281,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
+    await startPolling($)
     await read($, tick)
     const now = await $.clock.now()
     const failed = await readFailure($)
@@ -262,6 +290,61 @@ export const register: Register = on => {
     // No subscription, or a plan the endpoint reports no limits for: nothing to show.
     const isEmpty = current !== null && current.windows.length === 0
     if (isEmpty || (current === null && failed?.kind === 'no-login')) return next(e)
+    // The desktop app (and any graphical surface) lays out in pixels in a
+    // proportional font: no character frame, no cell-counted layout, real bars.
+    if (e.surface === 'desktop' || e.surface === 'vscode' || e.surface === 'mobile') {
+      const { Box, Text, Svg } = $.ui.resolve(e)
+      const readings = health(failed, attempts, current?.fetchedAt ?? null, now)
+      const readingsRow = readings && (
+        <Box flexDirection="row" flexWrap="wrap" columnGap="xs">
+          {readings.blocks.length > 0 && (
+            <Text>
+              {readings.blocks.map((isOk, index) => (
+                <Text key={`attempt-${index}`} color={isOk ? 'success' : 'error'}>■</Text>
+              ))}
+            </Text>
+          )}
+          <Text color={readings.isWarning ? 'warning' : undefined} dimColor={!readings.isWarning} bold>
+            {`${current === null ? 'Usage unavailable: ' : ''}${readings.headline}`}
+          </Text>
+          {readings.details.length > 0 && <Text dimColor>{`· ${readings.details.join(' · ')}`}</Text>}
+        </Box>
+      )
+      if (current === null) {
+        return (
+          <Box flexDirection="column" paddingX="sm" paddingY="xs">
+            {readingsRow ?? <Text dimColor>Usage: loading…</Text>}
+          </Box>
+        )
+      }
+      const pace = paceWarning(current, now)
+
+      return (
+        <Box flexDirection="column" rowGap="xs" paddingX="sm" paddingY="xs">
+          <Box flexDirection="row" flexWrap="wrap" columnGap="xl" rowGap="xs" alignItems="center">
+            {current.windows.map(window => {
+              const color = colorFor(window.percent)
+              const percent = percentText(window)
+
+              return (
+                <Box key={window.id} flexDirection="row" columnGap="sm" alignItems="center">
+                  <Text bold>{window.label}</Text>
+                  <Svg source={barSvg(window.percent, color)} alt={`${window.label} ${percent}`} width={GUI_BAR_WIDTH} height={6} />
+                  <Text color={color} bold>{percent}</Text>
+                  {window.resetsAt !== null && <Text dimColor>{`resets ${formatRemaining(window.resetsAt - now)}`}</Text>}
+                </Box>
+              )
+            })}
+          </Box>
+          {pace && (
+            <Text color="warning">
+              {`${pace.label} runs out in ~${formatRemaining(pace.runsOutIn)} at this pace (resets in ${formatRemaining(pace.resetsIn)})`}
+            </Text>
+          )}
+          {readingsRow}
+        </Box>
+      )
+    }
     const { Box, Text } = $.ui.resolve(e)
 
     // The frame gives way first when the band is short of rows.

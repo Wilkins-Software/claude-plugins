@@ -203,3 +203,33 @@ test('in fullscreen the frame is drawn by hand on the pane background, edge to e
   expect(side?.text).toBe('│')
   await ui.unmount()
 })
+
+test('the desktop app, a non-interactive host, starts reading when the band first draws', async ($, on) => {
+  const clock = mock.clock(on, { now: 10 * MIN })
+  mock.store(on)
+  const reads = engine(on)
+  await $.session.start({ cwd: '/', surface: null, isInteractive: false })
+  await clock.advance(0)
+  expect(reads.count).toBe(0)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await clock.advance(0)
+  expect(reads.count).toBe(1)
+  await ui.unmount()
+})
+
+test('the desktop band draws real bars and no character frame, even in fullscreen', async ($, on) => {
+  mock.clock(on)
+  on('state.get', (_, e, next) =>
+    e.key === 'snapshot' ? { value: { value: parseUsage(BODY, 0), version: 1 } } : next(e),
+  )
+  const ui = await $.ui.mount({
+    ...BAND,
+    surface: 'desktop',
+    viewport: { columns: 120, rows: 40, isFullscreen: true },
+  })
+  expect(await ui.find({ type: 'Text', text: /[╭│━]/ })).toBe(undefined)
+  expect((await ui.find({ type: 'Svg' }))?.props).toMatchObject({ alt: '5h 3%', width: 80 })
+  expect((await ui.find({ type: 'Text', text: /^Fable$/ }))?.text).toBe('Fable')
+  await ui.unmount()
+})

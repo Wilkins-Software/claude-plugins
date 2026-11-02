@@ -20,6 +20,10 @@ In short panes, such as a split terminal, the band fits the rows it's given inst
 - **Fable estimated between reads.** When the weekly figure rises after a turn that ran on Fable, the Fable bar rises by that amount divided by Fable's share of the weekly limit, for example ×2 for a 50% share. Estimated figures show a `~` (`~40%`) until the next real read corrects them.
 - The countdowns redraw every 30 seconds.
 
+## In the desktop app
+
+The Claude Code desktop app draws the same band with its own look: no character frame, a rounded bar per window, and the windows wrapping onto a second line when the prompt is narrow. The desktop app runs its session the way the SDK does, so the reads start when the band is first drawn rather than at session start.
+
 ## Heads-ups
 
 - A toast when any window crosses 80%, 90% or 100%. Each one shows once per reset, across all sessions.
